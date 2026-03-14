@@ -1,13 +1,49 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel as GeminiThinkingLevel } from '@google/genai';
 
 export type AspectRatio = '1:1' | '1:4' | '1:8' | '2:3' | '3:2' | '3:4' | '4:1' | '4:3' | '4:5' | '5:4' | '8:1' | '9:16' | '16:9' | '21:9';
 export type Resolution = '512' | '1K' | '2K' | '4K';
 export type ThinkingLevel = 'Minimal' | 'High';
+export type GenerationModel = 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
+
+export const ASPECT_RATIO_VALUES: Record<AspectRatio, number> = {
+  '1:1': 1 / 1,
+  '1:4': 1 / 4,
+  '1:8': 1 / 8,
+  '2:3': 2 / 3,
+  '3:2': 3 / 2,
+  '3:4': 3 / 4,
+  '4:1': 4 / 1,
+  '4:3': 4 / 3,
+  '4:5': 4 / 5,
+  '5:4': 5 / 4,
+  '8:1': 8 / 1,
+  '9:16': 9 / 16,
+  '16:9': 16 / 9,
+  '21:9': 21 / 9,
+};
+
+const FLASH_ASPECT_RATIOS: readonly AspectRatio[] = ['1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'];
+const PRO_ASPECT_RATIOS: readonly AspectRatio[] = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'];
+const FLASH_RESOLUTIONS: readonly Resolution[] = ['512', '1K', '2K', '4K'];
+const PRO_RESOLUTIONS: readonly Resolution[] = ['1K', '2K', '4K'];
+
+export function getSupportedAspectRatios(model: GenerationModel): readonly AspectRatio[] {
+  return model === 'gemini-3.1-flash-image-preview' ? FLASH_ASPECT_RATIOS : PRO_ASPECT_RATIOS;
+}
+
+export function getSupportedResolutions(model: GenerationModel): readonly Resolution[] {
+  return model === 'gemini-3.1-flash-image-preview' ? FLASH_RESOLUTIONS : PRO_RESOLUTIONS;
+}
+
+const SDK_THINKING_LEVELS: Record<ThinkingLevel, GeminiThinkingLevel> = {
+  Minimal: GeminiThinkingLevel.MINIMAL,
+  High: GeminiThinkingLevel.HIGH,
+};
 
 export interface GenerationParams {
   apiKey: string;
   prompt: string;
-  model: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
+  model: GenerationModel;
   aspectRatio: AspectRatio;
   resolution: Resolution;
   referenceImages?: string[]; // base64 arrays
@@ -47,7 +83,7 @@ export async function generateImage(params: GenerationParams): Promise<string> {
         imageSize: params.resolution,
       },
       thinkingConfig: params.model === 'gemini-3.1-flash-image-preview' ? {
-        thinkingLevel: params.thinkingLevel || 'Minimal',
+        thinkingLevel: SDK_THINKING_LEVELS[params.thinkingLevel || 'Minimal'],
         includeThoughts: false
       } : undefined,
       tools: tools as any // satisfying strict types depending on SDK version

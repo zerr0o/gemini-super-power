@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { ref, nextTick, computed } from 'vue';
+import { ref, nextTick, computed, watch } from 'vue';
 import { Settings, Image as ImageIcon, GitBranch, Layers, Type, Search, Loader2, Info, X, Upload, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import CanvasSelection, { CropData } from './components/CanvasSelection.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import { useAppStore } from './stores/appStore';
-import { generateImage, GenerationParams, AspectRatio, Resolution } from './services/geminiService';
+import { generateImage, GenerationParams, AspectRatio, Resolution, GenerationModel, ASPECT_RATIO_VALUES, getSupportedAspectRatios, getSupportedResolutions } from './services/geminiService';
 
 const activeTab = ref('generation');
 const store = useAppStore();
 
 const prompt = ref('');
-const model = ref<'gemini-3-pro-image-preview' | 'gemini-3.1-flash-image-preview'>('gemini-3.1-flash-image-preview');
+const model = ref<GenerationModel>('gemini-3.1-flash-image-preview');
 const isAutoRatio = ref(true);
 const aspectRatio = ref<AspectRatio>('16:9');
 const resolution = ref<Resolution>('2K');
@@ -28,17 +28,51 @@ const ALL_RESOLUTION_STEPS: { label: string; value: Resolution; px: number; flas
   { label: '4K',  value: '4K',  px: 4096 },
 ];
 
+const supportedAspectRatios = computed(() => getSupportedAspectRatios(model.value));
+const supportedResolutions = computed(() => getSupportedResolutions(model.value));
+
+function normalizeAspectRatioForModel(value: AspectRatio, currentModel: GenerationModel): AspectRatio {
+  const supported = getSupportedAspectRatios(currentModel);
+  if (supported.includes(value)) return value;
+
+  let closest = supported[0];
+  let minDiff = Infinity;
+  for (const candidate of supported) {
+    const diff = Math.abs(ASPECT_RATIO_VALUES[candidate] - ASPECT_RATIO_VALUES[value]);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closest = candidate;
+    }
+  }
+  return closest;
+}
+
+function normalizeResolutionForModel(value: Resolution, currentModel: GenerationModel): Resolution {
+  const supported = getSupportedResolutions(currentModel);
+  if (supported.includes(value)) return value;
+
+  const currentStep = ALL_RESOLUTION_STEPS.find(step => step.value === value);
+  if (currentStep) {
+    const nextSupported = ALL_RESOLUTION_STEPS.find(step => supported.includes(step.value) && step.px >= currentStep.px);
+    if (nextSupported) return nextSupported.value;
+  }
+
+  return supported[supported.length - 1];
+}
+
 /** Given the pixel size of the longest side of the selection, pick the next higher tier (max 4K). */
-function autoResolutionFromPx(longestSidePx: number): Resolution {
+function autoResolutionFromPx(longestSidePx: number, currentModel: GenerationModel): Resolution {
+  const supported = getSupportedResolutions(currentModel);
   for (const step of ALL_RESOLUTION_STEPS) {
+    if (!supported.includes(step.value)) continue;
     if (longestSidePx <= step.px) return step.value;
   }
-  return '4K';
+  return supported[supported.length - 1];
 }
 
 // Available steps filtered by model
 const RESOLUTION_STEPS = computed(() =>
-  ALL_RESOLUTION_STEPS.filter(s => !s.flashOnly || model.value === 'gemini-3.1-flash-image-preview')
+  ALL_RESOLUTION_STEPS.filter(s => supportedResolutions.value.includes(s.value))
 );
 
 // Reactive natural pixel dims of the current canvas selection (updated live via emit)
@@ -52,10 +86,15 @@ function handleSelectionPx(w: number, h: number) {
 
 /** Returns the auto-computed resolution from the current selection size, or the manual one. */
 const displayedResolution = computed<Resolution>(() => {
-  if (!isAutoResolution.value) return resolution.value;
+  if (!isAutoResolution.value) return normalizeResolutionForModel(resolution.value, model.value);
   const longestSide = Math.max(selectionNaturalW.value, selectionNaturalH.value);
-  if (longestSide < 1) return resolution.value; // No selection yet, keep current
-  return autoResolutionFromPx(longestSide);
+  if (longestSide < 1) return normalizeResolutionForModel(resolution.value, model.value);
+  return autoResolutionFromPx(longestSide, model.value);
+});
+
+watch(model, (nextModel) => {
+  aspectRatio.value = normalizeAspectRatioForModel(aspectRatio.value, nextModel);
+  resolution.value = normalizeResolutionForModel(resolution.value, nextModel);
 });
 
 
@@ -80,18 +119,28 @@ async function onGenerate() {
          : null;
 
       // Auto-resolution: pick the tier that covers the longest side of what we'll generate
-      let effectiveResolution = resolution.value;
+      const safeAspectRatio = normalizeAspectRatioForModel(aspectRatio.value, model.value);
+      let effectiveResolution = normalizeResolutionForModel(resolution.value, model.value);
+
+      if (safeAspectRatio !== aspectRatio.value) {
+         aspectRatio.value = safeAspectRatio;
+      }
+
+      if (effectiveResolution !== resolution.value) {
+         resolution.value = effectiveResolution;
+      }
+
       if (isAutoResolution.value && activeNode?.blobBase64) {
          // If we have a crop, use its natural pixel dimensions; otherwise use full image dimensions
          if (activeCropData.value) {
             const longestSide = Math.max(activeCropData.value.w, activeCropData.value.h);
-            effectiveResolution = autoResolutionFromPx(longestSide);
+            effectiveResolution = autoResolutionFromPx(longestSide, model.value);
          } else {
             // Load image to get naturalWidth/Height
             const img = canvasRef.value?.imageRef ?? null;
             if (img) {
                const longestSide = Math.max((img as HTMLImageElement).naturalWidth, (img as HTMLImageElement).naturalHeight);
-               effectiveResolution = autoResolutionFromPx(longestSide);
+               effectiveResolution = autoResolutionFromPx(longestSide, model.value);
             }
          }
       }
@@ -100,7 +149,7 @@ async function onGenerate() {
          apiKey: store.apiKey,
          prompt: prompt.value,
          model: model.value,
-         aspectRatio: aspectRatio.value,
+         aspectRatio: safeAspectRatio,
          resolution: effectiveResolution,
          referenceImages: implicitRef ?? store.referenceImages,
          useSearchGrounding: useSearchGrounding.value,
@@ -354,7 +403,7 @@ function confirmDelete() {
                <template v-if="activeTab === 'generation'">
                   <template v-if="activeImageNode()">
                      <CanvasSelection ref="canvasRef" :imageSrc="activeImageNode()!.blobBase64"
-                        :targetRatio="isAutoRatio ? 'auto' : aspectRatio" @cropped="handleCrop"
+                        :targetRatio="isAutoRatio ? 'auto' : aspectRatio" :availableRatios="supportedAspectRatios" @cropped="handleCrop"
                         @update:ratio="r => aspectRatio = r" @update:selection-px="handleSelectionPx" />
                   </template>
                   <template v-else-if="!isGenerating">
@@ -467,7 +516,7 @@ function confirmDelete() {
                      <button @click="isAutoRatio = !isAutoRatio"
                         class="col-span-2 bg-background border border-border rounded py-1 text-xs transition-colors"
                         :class="{ 'border-primary text-[#000] bg-primary font-bold': isAutoRatio }">Auto Snap</button>
-                     <template v-for="r in (['1:1','1:4','1:8','2:3','3:2','3:4','4:1','4:3','4:5','5:4','8:1','9:16','16:9','21:9'] as const)" :key="r">
+                     <template v-for="r in supportedAspectRatios" :key="r">
                         <button @click="aspectRatio = r; isAutoRatio = false"
                            class="bg-background border border-border rounded py-1 text-[10px] transition-colors leading-tight"
                            :class="{ 'border-primary text-primary': aspectRatio === r && !isAutoRatio, 'text-primary/40': aspectRatio === r && isAutoRatio }">{{ r }}</button>
