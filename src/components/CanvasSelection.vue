@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { Check, X as XIcon } from 'lucide-vue-next';
 
 const props = defineProps<{
@@ -300,6 +300,11 @@ watch(() => props.targetRatio, (newR) => {
    if (newR !== 'auto' && boxMetrics.value.w > 0 && mode.value === 'idle') {
       snapBoxToRatio(parseRatio(newR));
    }
+});
+
+defineExpose({
+  finalizeCrop,
+  hasActiveSelection: computed(() => boxMetrics.value.w > 20 && boxMetrics.value.h > 20)
 });
 </script>
 
