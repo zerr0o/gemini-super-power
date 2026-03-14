@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { Settings, Image as ImageIcon, GitBranch, Layers, Type, Search, Loader2, Info, X, Upload } from 'lucide-vue-next';
+import { Settings, Image as ImageIcon, GitBranch, Layers, Type, Search, Loader2, Info, X, Upload, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import CanvasSelection, { CropData } from './components/CanvasSelection.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import { useAppStore } from './stores/appStore';
@@ -34,25 +34,33 @@ async function onGenerate() {
       useSearchGrounding: useSearchGrounding.value
     };
     
+    // Capture the exact workspace context we started in so we don't dump the result into a different one if user switches tabs
+    const generationWorkspaceId = store.activeWorkspaceId;
+    const generationParentId = store.activeNodeId;
+    const generationCropData = activeCropData.value;
+    const generationBaseNodeBlob = activeImageNode()?.blobBase64;
+    
     const resultBase64 = await generateImage(params);
     
     // If we have an active crop composite data, we should combine the returned base64 with the original image
     let finalBase64 = resultBase64;
 
-    if (activeCropData.value && activeImageNode()) {
-       finalBase64 = await compositeImage(activeImageNode()!.blobBase64, resultBase64, activeCropData.value);
-       // Clear crop data after use
-       activeCropData.value = null;
+    if (generationCropData && generationBaseNodeBlob) {
+       finalBase64 = await compositeImage(generationBaseNodeBlob, resultBase64, generationCropData);
+       // Clear crop data after use if we are still in the same workspace
+       if (store.activeWorkspaceId === generationWorkspaceId) {
+          activeCropData.value = null;
+       }
     }
     
     store.addNode({
       id: Date.now().toString(),
-      parentId: store.activeNodeId,
+      parentId: generationParentId,
       blobBase64: finalBase64,
       prompt: prompt.value,
       model: model.value,
       createdAt: Date.now()
-    });
+    }, generationWorkspaceId || undefined);
     
   } catch (e: any) {
     console.error(e);
@@ -62,7 +70,7 @@ async function onGenerate() {
   }
 }
 
-const activeImageNode = () => store.nodes.find(n => n.id === store.activeNodeId);
+const activeImageNode = () => store.nodes?.find(n => n.id === store.activeNodeId);
 
 const activeCropData = ref<CropData | null>(null);
 
@@ -142,12 +150,55 @@ function onRefFileSelected(e: Event) {
      reader.readAsDataURL(file);
   }
 }
+
+function handleRenameWorkspace() {
+  if (!store.activeWorkspaceId) return;
+  const currentName = store.workspaces.find(w => w.id === store.activeWorkspaceId)?.name || '';
+  const newName = window.prompt("Rename Workspace:", currentName);
+  if (newName && newName.trim()) {
+     store.renameWorkspace(store.activeWorkspaceId, newName.trim());
+  }
+}
+
+function handleDeleteWorkspace() {
+  if (!store.activeWorkspaceId) return;
+  const currentName = store.workspaces.find(w => w.id === store.activeWorkspaceId)?.name || '';
+  if (window.confirm(`Are you sure you want to delete the workspace "${currentName}" and all its history? This action cannot be undone.`)) {
+     store.deleteWorkspace(store.activeWorkspaceId);
+  }
+}
 </script>
 
 <template>
   <div class="h-screen w-screen flex flex-col bg-background text-textMain overflow-hidden select-none">
-    <header class="h-8 bg-surface border-b border-border flex items-center justify-between px-4 app-region-drag">
-      <div class="text-xs font-semibold tracking-widest text-textMuted">BOLDBRUSH <span class="text-primary">SUPERPOWER</span></div>
+    <header class="h-10 bg-surface border-b border-border flex items-center justify-between px-4 app-region-drag select-none">
+      <div class="flex items-center gap-4">
+        <div class="text-[10px] font-bold tracking-[0.2em] text-textMuted flex items-center">
+           BOLDBRUSH <span class="text-primary ml-1">SUPERPOWER</span>
+        </div>
+        <div class="w-px h-4 bg-border"></div>
+        
+        <!-- Workspace Selector -->
+        <div class="flex items-center gap-2 app-region-no-drag">
+           <FolderOpen :size="14" class="text-textMuted" />
+           <select :value="store.activeWorkspaceId" @change="e => store.setActiveWorkspace((e.target as HTMLSelectElement).value)" class="bg-transparent text-xs text-text border-none focus:outline-none focus:ring-0 cursor-pointer hover:text-primary transition-colors pr-2">
+              <option v-for="ws in store.workspaces" :key="ws.id" :value="ws.id" class="bg-surface text-text">{{ ws.name }}</option>
+           </select>
+           
+           <div class="flex gap-1 ml-2 border-l border-border pl-2">
+             <button @click="store.createWorkspace('New Session ' + (store.workspaces.length + 1))" class="text-textMuted hover:text-green-400 p-1.5 rounded transition-colors" title="New Workspace">
+               <Plus :size="13" />
+             </button>
+             <button @click="handleRenameWorkspace" class="text-textMuted hover:text-blue-400 p-1.5 rounded transition-colors" title="Rename Workspace">
+               <Pencil :size="13" />
+             </button>
+             <button @click="handleDeleteWorkspace" class="text-textMuted hover:text-red-400 p-1.5 rounded transition-colors" title="Delete Workspace">
+               <Trash2 :size="13" />
+             </button>
+           </div>
+        </div>
+      </div>
+      
       <div class="flex items-center gap-2 app-region-no-drag">
          <span class="text-[10px] bg-primary/20 text-primary px-2 py-0.5 rounded cursor-pointer transition-colors hover:bg-primary/40">node info</span>
       </div>
