@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { Settings, Image as ImageIcon, GitBranch, Layers, Type, Search, Loader2, Info } from 'lucide-vue-next';
+import { Settings, Image as ImageIcon, GitBranch, Layers, Type, Search, Loader2, Info, X, Upload } from 'lucide-vue-next';
 import CanvasSelection, { CropData } from './components/CanvasSelection.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import { useAppStore } from './stores/appStore';
@@ -118,6 +118,26 @@ function onFileSelected(e: Event) {
            model: 'Local',
            createdAt: Date.now()
         });
+     };
+     reader.readAsDataURL(file);
+  }
+}
+
+const refFileInput = ref<HTMLInputElement | null>(null);
+
+function triggerRefUpload() {
+  refFileInput.value?.click();
+}
+
+function onRefFileSelected(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) {
+     const reader = new FileReader();
+     reader.onload = (e) => {
+        const base64 = e.target?.result as string;
+        if (store.referenceImages.length < 14) {
+          store.addReferenceImage(base64);
+        }
      };
      reader.readAsDataURL(file);
   }
@@ -286,6 +306,10 @@ function onFileSelected(e: Event) {
            <div class="flex flex-col gap-2">
              <div class="flex items-center justify-between">
                 <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Reference Limits ({{ store.referenceImages.length }}/14)</label>
+                <button @click="triggerRefUpload" class="text-xs bg-surfaceHover hover:bg-primary/20 hover:text-primary transition-colors px-2 py-1 rounded border border-border flex items-center gap-1" title="Upload Reference Image">
+                   <Upload :size="12" /> Add
+                </button>
+                <input type="file" ref="refFileInput" class="hidden" accept="image/*" @change="onRefFileSelected" />
              </div>
              <div v-if="store.referenceImages.length > 0" class="flex gap-2 overflow-x-auto pb-2 custom-scroll">
                 <div v-for="(img, idx) in store.referenceImages" :key="idx" class="relative shrink-0 w-16 h-16 rounded border border-border group">
