@@ -274,21 +274,23 @@ const connections = computed(() => {
        </div>
 
        <!-- Node Deletion Modal -->
-       <div v-if="nodeToDelete" class="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center">
-         <div class="bg-surface border border-red-500/30 p-6 rounded-xl shadow-[0_0_40px_rgba(239,68,68,0.15)] w-96 flex flex-col gap-4" @click.stop>
-           <div class="flex items-center gap-3 text-red-500">
-              <Trash2 :size="24" />
-              <h2 class="text-lg font-bold">Delete Branch</h2>
-           </div>
-           <p class="text-sm text-textMuted leading-relaxed">
-             Are you sure you want to permanently delete this generated logic and <strong class="text-red-400">all of its descendants</strong>? This cannot be fully undone.
-           </p>
-           <div class="flex justify-end gap-3 mt-4">
-             <button @click.stop="nodeToDelete = null" class="px-4 py-2 rounded-lg text-text hover:bg-surfaceHover transition-colors border border-border text-sm">Cancel</button>
-             <button @click.stop="confirmDeleteNode" class="px-4 py-2 rounded-lg bg-red-500 text-white font-medium hover:bg-red-600 transition-colors shadow-lg shadow-red-500/20 text-sm">Delete Branch</button>
+       <Teleport to="body">
+         <div v-if="nodeToDelete" class="fixed inset-0 z-[999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 app-region-no-drag select-text">
+           <div class="bg-surface border border-red-500/30 p-6 rounded-xl shadow-[0_0_40px_rgba(239,68,68,0.15)] w-full max-w-sm flex flex-col gap-4" @click.stop>
+             <div class="flex items-center gap-3 text-red-500">
+                <Trash2 :size="24" />
+                <h2 class="text-lg font-bold">Delete Branch</h2>
+             </div>
+             <p class="text-sm text-textMuted leading-relaxed">
+               Are you sure you want to permanently delete this generated logic and <strong class="text-red-400">all of its descendants</strong>? This cannot be fully undone.
+             </p>
+             <div class="flex justify-end gap-3 mt-4">
+               <button @click.stop="nodeToDelete = null" class="px-4 py-2 rounded-lg text-text hover:bg-surfaceHover transition-colors border border-border text-sm">Cancel</button>
+               <button @click.stop="confirmDeleteNode" class="px-4 py-2 rounded-lg bg-red-500 text-white font-medium hover:bg-red-600 transition-colors shadow-lg shadow-red-500/20 text-sm">Delete Branch</button>
+             </div>
            </div>
          </div>
-       </div>
+       </Teleport>
        
   </div>
 </template>
