@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 
 export type AspectRatio = '1:1' | '1:4' | '1:8' | '2:3' | '3:2' | '3:4' | '4:1' | '4:3' | '4:5' | '5:4' | '8:1' | '9:16' | '16:9' | '21:9';
 export type Resolution = '512' | '1K' | '2K' | '4K';
+export type ThinkingLevel = 'Minimal' | 'High';
 
 export interface GenerationParams {
   apiKey: string;
@@ -11,6 +12,7 @@ export interface GenerationParams {
   resolution: Resolution;
   referenceImages?: string[]; // base64 arrays
   useSearchGrounding?: boolean;
+  thinkingLevel?: ThinkingLevel;
 }
 
 export async function generateImage(params: GenerationParams): Promise<string> {
@@ -44,6 +46,10 @@ export async function generateImage(params: GenerationParams): Promise<string> {
         aspectRatio: params.aspectRatio,
         imageSize: params.resolution,
       },
+      thinkingConfig: params.model === 'gemini-3.1-flash-image-preview' ? {
+        thinkingLevel: params.thinkingLevel || 'Minimal',
+        includeThoughts: false
+      } : undefined,
       tools: tools as any // satisfying strict types depending on SDK version
     }
   });
