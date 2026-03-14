@@ -294,6 +294,14 @@ function cancelCrop() {
   mode.value = 'idle';
 }
 
+function selectAll() {
+  if (!imageRef.value || !containerRef.value) return;
+  const containerRect = containerRef.value.getBoundingClientRect();
+  const renderBox = getImageRenderBox(imageRef.value, containerRect);
+  boxMetrics.value = { x: renderBox.x, y: renderBox.y, w: renderBox.w, h: renderBox.h };
+  mode.value = 'idle';
+}
+
 // Watch for external ratio change to snap existing box
 import { watch } from 'vue';
 watch(() => props.targetRatio, (newR) => {
@@ -304,6 +312,7 @@ watch(() => props.targetRatio, (newR) => {
 
 defineExpose({
   finalizeCrop,
+  selectAll,
   hasActiveSelection: computed(() => boxMetrics.value.w > 20 && boxMetrics.value.h > 20)
 });
 </script>
@@ -315,6 +324,7 @@ defineExpose({
        @mousemove.prevent="handleMouseMove"
        @mouseup.prevent="handleMouseUp"
        @mouseleave.prevent="handleMouseUp"
+       @dblclick.prevent="selectAll"
        >
     
     <img ref="imageRef" :src="imageSrc" class="max-w-full max-h-full object-contain pointer-events-none select-none shadow-2xl rounded" draggable="false" />
