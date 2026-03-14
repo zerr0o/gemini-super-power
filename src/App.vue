@@ -32,13 +32,19 @@ async function onGenerate() {
    errorMsg.value = '';
 
    try {
+      // If no references provided but we have an active image, use the full image as implicit reference
+      const activeNode = activeImageNode();
+      const implicitRef = store.referenceImages.length === 0 && activeNode?.blobBase64
+         ? [activeNode.blobBase64]
+         : null;
+
       const params: GenerationParams = {
          apiKey: store.apiKey,
          prompt: prompt.value,
          model: model.value,
          aspectRatio: aspectRatio.value,
          resolution: resolution.value,
-         referenceImages: store.referenceImages,
+         referenceImages: implicitRef ?? store.referenceImages,
          useSearchGrounding: useSearchGrounding.value
       };
 
@@ -373,7 +379,7 @@ function confirmDelete() {
             </div>
          </main>
 
-         <aside class="w-80 bg-surface border-l border-border flex flex-col relative">
+         <aside v-if="activeTab === 'generation'" class="w-80 bg-surface border-l border-border flex flex-col relative">
             <div v-if="errorMsg"
                class="absolute top-0 left-0 w-full bg-red-900/40 text-red-200 text-xs p-2 z-50 break-words border-b border-red-500/50">
                {{ errorMsg }}
