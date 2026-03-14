@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, computed, watch } from 'vue';
+import { ref, nextTick, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { Settings, Image as ImageIcon, GitBranch, Layers, Type, Search, Loader2, Info, X, Upload, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import CanvasSelection, { CropData } from './components/CanvasSelection.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
@@ -78,6 +78,9 @@ const RESOLUTION_STEPS = computed(() =>
 // Reactive natural pixel dims of the current canvas selection (updated live via emit)
 const selectionNaturalW = ref(0);
 const selectionNaturalH = ref(0);
+const isHoldingParentPreviewKey = ref(false);
+const isShowingParentPreview = ref(false);
+const suppressParentPreviewUntilKeyup = ref(false);
 
 function handleSelectionPx(w: number, h: number) {
   selectionNaturalW.value = w;
@@ -193,10 +196,101 @@ async function onGenerate() {
 }
 
 const activeImageNode = () => store.nodes?.find(n => n.id === store.activeNodeId);
+const activeParentImageNode = computed(() => {
+   const current = activeImageNode();
+   if (!current?.parentId) return null;
+   return store.nodes.find(n => n.id === current.parentId) || null;
+});
 
 const activeCropData = ref<CropData | null>(null);
 
 const canvasRef = ref<any>(null);
+
+function resetTransientSelectionState() {
+   activeCropData.value = null;
+   selectionNaturalW.value = 0;
+   selectionNaturalH.value = 0;
+}
+
+function resetParentPreviewState() {
+   isHoldingParentPreviewKey.value = false;
+   isShowingParentPreview.value = false;
+   suppressParentPreviewUntilKeyup.value = false;
+}
+
+function isTypingTarget(target: EventTarget | null) {
+   const el = target instanceof HTMLElement ? target : null;
+   if (!el) return false;
+   return el.isContentEditable || !!el.closest('input, textarea, select, [contenteditable="true"]');
+}
+
+function canUseParentShortcut(target: EventTarget | null) {
+   return activeTab.value === 'generation'
+      && !isGenerating.value
+      && !showRenameModal.value
+      && !showDeleteModal.value
+      && !isTypingTarget(target)
+      && !!activeParentImageNode.value;
+}
+
+function handleGlobalKeyDown(e: KeyboardEvent) {
+   const key = e.key.toLowerCase();
+   const isSpace = e.code === 'Space' || e.key === ' ';
+
+   if (key === 'a') {
+      if (!canUseParentShortcut(e.target)) return;
+      e.preventDefault();
+      isHoldingParentPreviewKey.value = true;
+      if (!e.repeat && !suppressParentPreviewUntilKeyup.value) {
+         isShowingParentPreview.value = true;
+      }
+      return;
+   }
+
+   if (!isSpace) return;
+   if (!canUseParentShortcut(e.target)) return;
+   if (!isHoldingParentPreviewKey.value || !isShowingParentPreview.value || !activeParentImageNode.value) return;
+
+   e.preventDefault();
+   suppressParentPreviewUntilKeyup.value = true;
+   isShowingParentPreview.value = false;
+   resetTransientSelectionState();
+   store.setActiveNode(activeParentImageNode.value.id);
+}
+
+function handleGlobalKeyUp(e: KeyboardEvent) {
+   if (e.key.toLowerCase() !== 'a') return;
+   isHoldingParentPreviewKey.value = false;
+   isShowingParentPreview.value = false;
+   suppressParentPreviewUntilKeyup.value = false;
+}
+
+function handleWindowBlur() {
+   resetParentPreviewState();
+}
+
+onMounted(() => {
+   window.addEventListener('keydown', handleGlobalKeyDown);
+   window.addEventListener('keyup', handleGlobalKeyUp);
+   window.addEventListener('blur', handleWindowBlur);
+});
+
+onBeforeUnmount(() => {
+   window.removeEventListener('keydown', handleGlobalKeyDown);
+   window.removeEventListener('keyup', handleGlobalKeyUp);
+   window.removeEventListener('blur', handleWindowBlur);
+});
+
+watch(() => activeTab.value, (tab) => {
+   if (tab !== 'generation') {
+      resetParentPreviewState();
+   }
+});
+
+watch(() => store.activeNodeId, () => {
+   resetTransientSelectionState();
+   isShowingParentPreview.value = false;
+});
 
 function handleCrop(data: CropData) {
    // Always insert crop at the beginning (priority 1)
@@ -402,9 +496,21 @@ function confirmDelete() {
                <!-- GENERATION VIEW -->
                <template v-if="activeTab === 'generation'">
                   <template v-if="activeImageNode()">
-                     <CanvasSelection ref="canvasRef" :imageSrc="activeImageNode()!.blobBase64"
-                        :targetRatio="isAutoRatio ? 'auto' : aspectRatio" :availableRatios="supportedAspectRatios" @cropped="handleCrop"
-                        @update:ratio="r => aspectRatio = r" @update:selection-px="handleSelectionPx" />
+                     <div class="relative w-full h-full">
+                        <CanvasSelection :key="activeImageNode()!.id" ref="canvasRef" :imageSrc="activeImageNode()!.blobBase64"
+                           :targetRatio="isAutoRatio ? 'auto' : aspectRatio" :availableRatios="supportedAspectRatios" @cropped="handleCrop"
+                           @update:ratio="r => aspectRatio = r" @update:selection-px="handleSelectionPx" />
+                        <div v-if="isShowingParentPreview && activeParentImageNode"
+                           class="absolute inset-0 z-30 flex items-center justify-center bg-[#111] pointer-events-none">
+                           <img :src="activeParentImageNode.blobBase64"
+                              class="max-w-full max-h-full object-contain shadow-2xl rounded" />
+                           <div
+                              class="absolute top-4 left-1/2 -translate-x-1/2 bg-surface/90 backdrop-blur-md px-4 py-2 rounded-full border border-border text-[11px] text-textMuted tracking-wide">
+                              Parent Preview: release <span class="text-textMain font-semibold">A</span> to return,
+                              press <span class="text-textMain font-semibold">Space</span> to restore this version
+                           </div>
+                        </div>
+                     </div>
                   </template>
                   <template v-else-if="!isGenerating">
                      <div
