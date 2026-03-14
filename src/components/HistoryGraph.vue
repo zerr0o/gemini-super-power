@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import type { ImageNode } from '../stores/appStore';
+import { useAppStore } from '../stores/appStore';
+import { Trash2 } from 'lucide-vue-next';
+
+// Use the store
+const store = useAppStore();
 
 const props = defineProps<{
   nodes: ImageNode[];
@@ -18,6 +23,18 @@ const pan = ref({ x: 50, y: 50 });
 const zoom = ref(1);
 const isPanning = ref(false);
 const startPan = ref({ x: 0, y: 0 });
+
+const isDeleteMode = ref(false);
+
+function handleNodeClick(nodeId: string) {
+  if (isDeleteMode.value) {
+     if (window.confirm("Are you sure you want to delete this node and all of its branching history?")) {
+        store.deleteNodeAndChildren(nodeId);
+     }
+  } else {
+     emit('select', nodeId);
+  }
+}
 
 function handleWheel(e: WheelEvent) {
   const zoomFactor = 0.05;
@@ -44,6 +61,25 @@ function handleMouseMove(e: MouseEvent) {
 function handleMouseUp() {
   isPanning.value = false;
 }
+
+function centerOnNode(nodeId: string) {
+  const node = laidOutNodes.value.find(n => n.id === nodeId);
+  if (!node || !svgContainer.value) return;
+  const rect = svgContainer.value.getBoundingClientRect();
+  pan.value = {
+    x: (rect.width / 2) - (node.x + 140 / 2) * zoom.value,
+    y: (rect.height / 2) - (node.y + 180 / 2) * zoom.value
+  };
+}
+
+onMounted(() => {
+  if (props.nodes.length > 0) {
+    nextTick(() => {
+      const target = props.activeNodeId || props.nodes[props.nodes.length - 1].id;
+      centerOnNode(target);
+    });
+  }
+});
 
 // Layout Calculation
 interface LayoutNode extends ImageNode {
@@ -75,30 +111,33 @@ const laidOutNodes = computed(() => {
   const GAP_X = 40;
   const GAP_Y = 80;
   
-  // Track the lowest X assigned so far at a specific depth so siblings don't overlap globally?
-  // We'll just do a simple recursive sum allocator.
-  let currentStartX = 0;
-  
-  function layoutSubtree(node: ImageNode, depth: number): number {
+  // Pass 1: calculate subtree widths
+  const subtreeWidth = new Map<string, number>();
+  function calcWidth(node: ImageNode): number {
     const children = childrenMap.get(node.id) || [];
-    let myX = 0;
-    
     if (children.length === 0) {
-      myX = currentStartX;
-      currentStartX += NODE_W + GAP_X;
-    } else {
-      const childXPos: number[] = [];
-      children.forEach((child) => {
-        childXPos.push(layoutSubtree(child, depth + 1));
-      });
-      myX = (childXPos[0] + childXPos[childXPos.length - 1]) / 2;
-      
-      // Prevent parent from crashing into the global currentStartX if its children were pushed right but its depth had no other elements?
-      if (myX < currentStartX) {
-        myX = currentStartX;
-        currentStartX += NODE_W + GAP_X;
-      }
+      subtreeWidth.set(node.id, NODE_W);
+      return NODE_W;
     }
+    let width = 0;
+    children.forEach((child, i) => {
+      width += calcWidth(child);
+      if (i < children.length - 1) width += GAP_X;
+    });
+    const finalWidth = Math.max(NODE_W, width);
+    subtreeWidth.set(node.id, finalWidth);
+    return finalWidth;
+  }
+  
+  roots.forEach(r => calcWidth(r));
+  
+  // Pass 2: layout nodes top-down based on assigned box
+  let globalStartX = 0;
+  
+  function assignPosition(node: ImageNode, startX: number, depth: number) {
+    const width = subtreeWidth.get(node.id)!;
+    // node is centered in its allocated width
+    const myX = startX + (width / 2) - (NODE_W / 2);
     
     result.push({
       ...node,
@@ -106,11 +145,30 @@ const laidOutNodes = computed(() => {
       y: depth * (NODE_H + GAP_Y)
     });
     
-    return myX;
+    const children = childrenMap.get(node.id) || [];
+    let childStartX = startX;
+    
+    // If children total width is less than parent width, center the children block
+    let childrenTotalWidth = 0;
+    children.forEach((child, i) => {
+       childrenTotalWidth += subtreeWidth.get(child.id)!;
+       if (i < children.length - 1) childrenTotalWidth += GAP_X;
+    });
+    
+    if (childrenTotalWidth < width) {
+       childStartX += (width - childrenTotalWidth) / 2;
+    }
+    
+    children.forEach(child => {
+      assignPosition(child, childStartX, depth + 1);
+      childStartX += subtreeWidth.get(child.id)! + GAP_X;
+    });
   }
   
   roots.forEach(r => {
-    layoutSubtree(r, 0);
+    const w = subtreeWidth.get(r.id)!;
+    assignPosition(r, globalStartX, 0);
+    globalStartX += w + GAP_X;
   });
   
   return result;
@@ -163,13 +221,22 @@ const connections = computed(() => {
             </svg>
             
             <div v-for="node in laidOutNodes" :key="node.id"
-                 class="absolute flex flex-col items-center bg-surface border rounded overflow-hidden shadow-lg transition-colors cursor-pointer hover:border-text/50"
-                 :class="{ 'border-primary shadow-[0_0_20px_rgba(250,204,21,0.2)] z-10': activeNodeId === node.id, 'border-border/50': activeNodeId !== node.id }"
+                 class="absolute flex flex-col items-center bg-surface border rounded shadow-lg transition-colors cursor-pointer group hover:z-50"
+                 :class="{ 
+                    'border-primary shadow-[0_0_20px_rgba(250,204,21,0.2)] z-10': activeNodeId === node.id && !isDeleteMode, 
+                    'border-border/50 z-0 hover:border-text/50': activeNodeId !== node.id && !isDeleteMode,
+                    'border-red-500/50 hover:border-red-500 hover:shadow-[0_0_20px_rgba(239,68,68,0.4)] z-50': isDeleteMode
+                 }"
                  :style="{ left: node.x + 'px', top: node.y + 'px', width: '140px', height: '180px' }"
-                 @click.stop="emit('select', node.id)">
+                 @click.stop="handleNodeClick(node.id)">
                  
-                 <div class="h-28 w-full bg-black flex items-center justify-center overflow-hidden relative group p-1">
+                 <div class="h-28 w-full bg-black flex items-center justify-center relative p-1 pointer-events-none rounded-t overflow-hidden">
                     <img :src="node.blobBase64" class="max-w-full max-h-full object-contain rounded-sm" draggable="false" />
+                 </div>
+                 
+                 <!-- Hover Image Popout -->
+                 <div class="hidden group-hover:flex absolute z-50 -inset-24 bg-black border border-primary rounded-xl shadow-[0_10px_60px_rgba(0,0,0,1)] items-center justify-center pointer-events-none">
+                    <img :src="node.blobBase64" class="max-w-full max-h-full object-contain rounded-lg" draggable="false" />
                  </div>
                  <div class="flex-1 w-full p-2 flex flex-col gap-1 justify-center bg-surfaceDark border-t border-border/50">
                     <p class="text-[11px] text-text font-medium truncate" :title="node.prompt">{{ node.prompt || 'Base Image' }}</p>
@@ -184,6 +251,17 @@ const connections = computed(() => {
        
        <!-- HUD controls -->
        <div class="absolute bottom-4 right-4 flex gap-2 z-50">
+          <button @click="isDeleteMode = !isDeleteMode" 
+                  class="border px-3 py-1.5 rounded-md text-xs shadow-lg transition-colors flex items-center gap-2"
+                  :class="isDeleteMode ? 'bg-red-500/20 text-red-400 border-red-500/50 hover:bg-red-500/40' : 'bg-surface border-border text-textMuted hover:text-white'">
+            <Trash2 :size="14" />
+            <span v-if="isDeleteMode">Delete Mode Active</span>
+            <span v-else>Clean Graph</span>
+          </button>
+          
+          <button @click="activeNodeId ? centerOnNode(activeNodeId) : null" class="bg-surface border border-border text-textMuted px-3 py-1.5 rounded-md text-xs hover:text-white shadow-lg transition-colors flex items-center gap-2">
+            Focus Active Node
+          </button>
           <button @click="zoom = 1; pan = {x: 50, y: 50}" class="bg-surface border border-border text-textMuted px-3 py-1.5 rounded-md text-xs hover:text-white shadow-lg transition-colors flex items-center gap-2">
             Reset View
           </button>
