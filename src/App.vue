@@ -151,21 +151,34 @@ function onRefFileSelected(e: Event) {
   }
 }
 
+const showRenameModal = ref(false);
+const renameInput = ref('');
+const showDeleteModal = ref(false);
+
 function handleRenameWorkspace() {
   if (!store.activeWorkspaceId) return;
   const currentName = store.workspaces.find(w => w.id === store.activeWorkspaceId)?.name || '';
-  const newName = window.prompt("Rename Workspace:", currentName);
-  if (newName && newName.trim()) {
-     store.renameWorkspace(store.activeWorkspaceId, newName.trim());
+  renameInput.value = currentName;
+  showRenameModal.value = true;
+}
+
+function confirmRename() {
+  if (store.activeWorkspaceId && renameInput.value.trim()) {
+     store.renameWorkspace(store.activeWorkspaceId, renameInput.value.trim());
   }
+  showRenameModal.value = false;
 }
 
 function handleDeleteWorkspace() {
   if (!store.activeWorkspaceId) return;
-  const currentName = store.workspaces.find(w => w.id === store.activeWorkspaceId)?.name || '';
-  if (window.confirm(`Are you sure you want to delete the workspace "${currentName}" and all its history? This action cannot be undone.`)) {
+  showDeleteModal.value = true;
+}
+
+function confirmDelete() {
+  if (store.activeWorkspaceId) {
      store.deleteWorkspace(store.activeWorkspaceId);
   }
+  showDeleteModal.value = false;
 }
 </script>
 
@@ -393,6 +406,37 @@ function handleDeleteWorkspace() {
         </div>
       </aside>
     </div>
+
+    <!-- Rename Workspace Modal -->
+    <div v-if="showRenameModal" class="absolute inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center">
+      <div class="bg-surface border border-border p-6 rounded-xl shadow-2xl w-96 flex flex-col gap-4">
+        <h2 class="text-lg font-semibold text-text">Rename Workspace</h2>
+        <input v-model="renameInput" @keyup.enter="confirmRename" type="text" class="w-full bg-background border border-border rounded-lg px-3 py-2 text-text focus:outline-none focus:border-primary transition-colors" placeholder="Workspace Name..." autofocus />
+        <div class="flex justify-end gap-3 mt-2">
+          <button @click="showRenameModal = false" class="px-4 py-2 rounded-lg text-textMuted hover:bg-surfaceHover transition-colors text-sm">Cancel</button>
+          <button @click="confirmRename" class="px-4 py-2 rounded-lg bg-primary text-black font-medium hover:bg-primary/90 transition-colors text-sm">Rename</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Workspace Modal -->
+    <div v-if="showDeleteModal" class="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center">
+      <div class="bg-surface border border-red-500/30 p-6 rounded-xl shadow-[0_0_40px_rgba(239,68,68,0.15)] w-96 flex flex-col gap-4">
+        <div class="flex items-center gap-3 text-red-500">
+           <Trash2 :size="24" />
+           <h2 class="text-lg font-bold">Delete Workspace</h2>
+        </div>
+        <p class="text-sm text-textMuted leading-relaxed">
+          Are you sure you want to permanently delete <strong class="text-text">{{ store.activeWorkspace?.name }}</strong>? 
+          This will irreversibly destroy all generated images and history within this workspace.
+        </p>
+        <div class="flex justify-end gap-3 mt-4">
+          <button @click="showDeleteModal = false" class="px-4 py-2 rounded-lg text-text hover:bg-surfaceHover transition-colors border border-border text-sm">Cancel</button>
+          <button @click="confirmDelete" class="px-4 py-2 rounded-lg bg-red-500 text-white font-medium hover:bg-red-600 transition-colors shadow-lg shadow-red-500/20 text-sm">Permanently Delete</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 

@@ -25,15 +25,21 @@ const isPanning = ref(false);
 const startPan = ref({ x: 0, y: 0 });
 
 const isDeleteMode = ref(false);
+const nodeToDelete = ref<string | null>(null);
 
 function handleNodeClick(nodeId: string) {
   if (isDeleteMode.value) {
-     if (window.confirm("Are you sure you want to delete this node and all of its branching history?")) {
-        store.deleteNodeAndChildren(nodeId);
-     }
+     nodeToDelete.value = nodeId;
   } else {
      emit('select', nodeId);
   }
+}
+
+function confirmDeleteNode() {
+  if (nodeToDelete.value) {
+     store.deleteNodeAndChildren(nodeToDelete.value);
+  }
+  nodeToDelete.value = null;
 }
 
 function handleWheel(e: WheelEvent) {
@@ -250,8 +256,8 @@ const connections = computed(() => {
        </div>
        
        <!-- HUD controls -->
-       <div class="absolute bottom-4 right-4 flex gap-2 z-50">
-          <button @click="isDeleteMode = !isDeleteMode" 
+       <div class="absolute bottom-4 right-4 flex gap-2 z-40">
+          <button @click="isDeleteMode = !isDeleteMode; nodeToDelete = null" 
                   class="border px-3 py-1.5 rounded-md text-xs shadow-lg transition-colors flex items-center gap-2"
                   :class="isDeleteMode ? 'bg-red-500/20 text-red-400 border-red-500/50 hover:bg-red-500/40' : 'bg-surface border-border text-textMuted hover:text-white'">
             <Trash2 :size="14" />
@@ -266,5 +272,23 @@ const connections = computed(() => {
             Reset View
           </button>
        </div>
+
+       <!-- Node Deletion Modal -->
+       <div v-if="nodeToDelete" class="absolute inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center">
+         <div class="bg-surface border border-red-500/30 p-6 rounded-xl shadow-[0_0_40px_rgba(239,68,68,0.15)] w-96 flex flex-col gap-4" @click.stop>
+           <div class="flex items-center gap-3 text-red-500">
+              <Trash2 :size="24" />
+              <h2 class="text-lg font-bold">Delete Branch</h2>
+           </div>
+           <p class="text-sm text-textMuted leading-relaxed">
+             Are you sure you want to permanently delete this generated logic and <strong class="text-red-400">all of its descendants</strong>? This cannot be fully undone.
+           </p>
+           <div class="flex justify-end gap-3 mt-4">
+             <button @click.stop="nodeToDelete = null" class="px-4 py-2 rounded-lg text-text hover:bg-surfaceHover transition-colors border border-border text-sm">Cancel</button>
+             <button @click.stop="confirmDeleteNode" class="px-4 py-2 rounded-lg bg-red-500 text-white font-medium hover:bg-red-600 transition-colors shadow-lg shadow-red-500/20 text-sm">Delete Branch</button>
+           </div>
+         </div>
+       </div>
+       
   </div>
 </template>
