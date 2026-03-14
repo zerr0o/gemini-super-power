@@ -1,11 +1,14 @@
 import { GoogleGenAI } from '@google/genai';
 
+export type AspectRatio = '1:1' | '1:4' | '1:8' | '2:3' | '3:2' | '3:4' | '4:1' | '4:3' | '4:5' | '5:4' | '8:1' | '9:16' | '16:9' | '21:9';
+export type Resolution = '512' | '1K' | '2K' | '4K';
+
 export interface GenerationParams {
   apiKey: string;
   prompt: string;
   model: 'gemini-3.1-flash-image-preview' | 'gemini-3-pro-image-preview';
-  aspectRatio: '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
-  resolution: '1K' | '2K' | '4K';
+  aspectRatio: AspectRatio;
+  resolution: Resolution;
   referenceImages?: string[]; // base64 arrays
   useSearchGrounding?: boolean;
 }

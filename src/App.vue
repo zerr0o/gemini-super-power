@@ -1,22 +1,62 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue';
+import { ref, nextTick, computed } from 'vue';
 import { Settings, Image as ImageIcon, GitBranch, Layers, Type, Search, Loader2, Info, X, Upload, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import CanvasSelection, { CropData } from './components/CanvasSelection.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import { useAppStore } from './stores/appStore';
-import { generateImage, GenerationParams } from './services/geminiService';
+import { generateImage, GenerationParams, AspectRatio, Resolution } from './services/geminiService';
 
 const activeTab = ref('generation');
 const store = useAppStore();
 
 const prompt = ref('');
-const model = ref<'gemini-3-pro-image-preview' | 'gemini-3.1-flash-image-preview'>('gemini-3-pro-image-preview');
+const model = ref<'gemini-3-pro-image-preview' | 'gemini-3.1-flash-image-preview'>('gemini-3.1-flash-image-preview');
 const isAutoRatio = ref(true);
-const aspectRatio = ref<'16:9' | '1:1' | '9:16' | '4:3' | '3:4'>('16:9');
-const resolution = ref<'1K' | '2K' | '4K'>('2K');
+const aspectRatio = ref<AspectRatio>('16:9');
+const resolution = ref<Resolution>('2K');
+const isAutoResolution = ref(true);
 const isGenerating = ref(false);
 const errorMsg = ref('');
 const useSearchGrounding = ref(false);
+
+// Resolution steps — 512 is Flash-only
+const ALL_RESOLUTION_STEPS: { label: string; value: Resolution; px: number; flashOnly?: boolean }[] = [
+  { label: '512', value: '512', px: 512, flashOnly: true },
+  { label: '1K',  value: '1K',  px: 1024 },
+  { label: '2K',  value: '2K',  px: 2048 },
+  { label: '4K',  value: '4K',  px: 4096 },
+];
+
+/** Given the pixel size of the longest side of the selection, pick the next higher tier (max 4K). */
+function autoResolutionFromPx(longestSidePx: number): Resolution {
+  for (const step of ALL_RESOLUTION_STEPS) {
+    if (longestSidePx <= step.px) return step.value;
+  }
+  return '4K';
+}
+
+// Available steps filtered by model
+const RESOLUTION_STEPS = computed(() =>
+  ALL_RESOLUTION_STEPS.filter(s => !s.flashOnly || model.value === 'gemini-3.1-flash-image-preview')
+);
+
+// Reactive natural pixel dims of the current canvas selection (updated live via emit)
+const selectionNaturalW = ref(0);
+const selectionNaturalH = ref(0);
+
+function handleSelectionPx(w: number, h: number) {
+  selectionNaturalW.value = w;
+  selectionNaturalH.value = h;
+}
+
+/** Returns the auto-computed resolution from the current selection size, or the manual one. */
+const displayedResolution = computed<Resolution>(() => {
+  if (!isAutoResolution.value) return resolution.value;
+  const longestSide = Math.max(selectionNaturalW.value, selectionNaturalH.value);
+  if (longestSide < 1) return resolution.value; // No selection yet, keep current
+  return autoResolutionFromPx(longestSide);
+});
+
 
 async function onGenerate() {
    if (!prompt.value) return;
@@ -38,12 +78,29 @@ async function onGenerate() {
          ? [activeNode.blobBase64]
          : null;
 
+      // Auto-resolution: pick the tier that covers the longest side of what we'll generate
+      let effectiveResolution = resolution.value;
+      if (isAutoResolution.value && activeNode?.blobBase64) {
+         // If we have a crop, use its natural pixel dimensions; otherwise use full image dimensions
+         if (activeCropData.value) {
+            const longestSide = Math.max(activeCropData.value.w, activeCropData.value.h);
+            effectiveResolution = autoResolutionFromPx(longestSide);
+         } else {
+            // Load image to get naturalWidth/Height
+            const img = canvasRef.value?.imageRef ?? null;
+            if (img) {
+               const longestSide = Math.max((img as HTMLImageElement).naturalWidth, (img as HTMLImageElement).naturalHeight);
+               effectiveResolution = autoResolutionFromPx(longestSide);
+            }
+         }
+      }
+
       const params: GenerationParams = {
          apiKey: store.apiKey,
          prompt: prompt.value,
          model: model.value,
          aspectRatio: aspectRatio.value,
-         resolution: resolution.value,
+         resolution: effectiveResolution,
          referenceImages: implicitRef ?? store.referenceImages,
          useSearchGrounding: useSearchGrounding.value
       };
@@ -296,7 +353,7 @@ function confirmDelete() {
                   <template v-if="activeImageNode()">
                      <CanvasSelection ref="canvasRef" :imageSrc="activeImageNode()!.blobBase64"
                         :targetRatio="isAutoRatio ? 'auto' : aspectRatio" @cropped="handleCrop"
-                        @update:ratio="r => aspectRatio = r" />
+                        @update:ratio="r => aspectRatio = r" @update:selection-px="handleSelectionPx" />
                   </template>
                   <template v-else-if="!isGenerating">
                      <div
@@ -403,40 +460,29 @@ function confirmDelete() {
 
                <div class="flex flex-col gap-2">
                   <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Aspect Ratio</label>
-                  <div class="grid grid-cols-3 gap-1">
+                  <div class="grid grid-cols-5 gap-1">
+                     <!-- Auto Snap spans 2 cols to be distinct -->
                      <button @click="isAutoRatio = !isAutoRatio"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
+                        class="col-span-2 bg-background border border-border rounded py-1 text-xs transition-colors"
                         :class="{ 'border-primary text-[#000] bg-primary font-bold': isAutoRatio }">Auto Snap</button>
-                     <button @click="aspectRatio = '16:9'; isAutoRatio = false"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': aspectRatio === '16:9' && !isAutoRatio, 'text-primary/50': aspectRatio === '16:9' && isAutoRatio }">16:9</button>
-                     <button @click="aspectRatio = '4:3'; isAutoRatio = false"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': aspectRatio === '4:3' && !isAutoRatio, 'text-primary/50': aspectRatio === '4:3' && isAutoRatio }">4:3</button>
-                     <button @click="aspectRatio = '1:1'; isAutoRatio = false"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': aspectRatio === '1:1' && !isAutoRatio, 'text-primary/50': aspectRatio === '1:1' && isAutoRatio }">1:1</button>
-                     <button @click="aspectRatio = '3:4'; isAutoRatio = false"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': aspectRatio === '3:4' && !isAutoRatio, 'text-primary/50': aspectRatio === '3:4' && isAutoRatio }">3:4</button>
-                     <button @click="aspectRatio = '9:16'; isAutoRatio = false"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': aspectRatio === '9:16' && !isAutoRatio, 'text-primary/50': aspectRatio === '9:16' && isAutoRatio }">9:16</button>
+                     <template v-for="r in (['1:1','1:4','1:8','2:3','3:2','3:4','4:1','4:3','4:5','5:4','8:1','9:16','16:9','21:9'] as const)" :key="r">
+                        <button @click="aspectRatio = r; isAutoRatio = false"
+                           class="bg-background border border-border rounded py-1 text-[10px] transition-colors leading-tight"
+                           :class="{ 'border-primary text-primary': aspectRatio === r && !isAutoRatio, 'text-primary/40': aspectRatio === r && isAutoRatio }">{{ r }}</button>
+                     </template>
                   </div>
                </div>
 
                <div class="flex flex-col gap-2">
                   <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Resolution</label>
-                  <div class="grid grid-cols-3 gap-2">
-                     <button @click="resolution = '1K'"
+                  <div class="grid grid-cols-5 gap-1">
+                     <button @click="isAutoResolution = true"
+                        class="col-span-1 bg-background border border-border rounded py-1 text-xs transition-colors"
+                        :class="{ 'border-primary text-[#000] bg-primary font-bold': isAutoResolution }">Auto</button>
+                     <button v-for="step in RESOLUTION_STEPS" :key="step.value"
+                        @click="resolution = step.value; isAutoResolution = false"
                         class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': resolution === '1K' }">1K</button>
-                     <button @click="resolution = '2K'"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': resolution === '2K' }">2K</button>
-                     <button @click="resolution = '4K'"
-                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
-                        :class="{ 'border-primary text-primary': resolution === '4K' }">4K</button>
+                        :class="{ 'border-primary text-primary': displayedResolution === step.value && !isAutoResolution, 'text-primary/40': displayedResolution === step.value && isAutoResolution }">{{ step.label }}</button>
                   </div>
                </div>
 
