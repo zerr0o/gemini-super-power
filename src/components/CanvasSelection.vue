@@ -2,11 +2,13 @@
 import { ref, computed } from 'vue';
 import { Check, X as XIcon } from 'lucide-vue-next';
 
+import { ASPECT_RATIO_VALUES } from '../services/geminiService';
 import type { AspectRatio } from '../services/geminiService';
 
 const props = defineProps<{
   imageSrc: string;
   targetRatio: 'auto' | AspectRatio;
+  availableRatios: readonly AspectRatio[];
 }>();
 
 export interface CropData {
@@ -34,37 +36,21 @@ const currentPos = ref({ x: 0, y: 0 });
 const boxMetrics = ref({ x: 0, y: 0, w: 0, h: 0 });
 const initialBox = ref({ x: 0, y: 0, w: 0, h: 0 });
 
-const availableRatios: Record<AspectRatio, number> = {
-  '1:1':  1/1,
-  '1:4':  1/4,
-  '1:8':  1/8,
-  '2:3':  2/3,
-  '3:2':  3/2,
-  '3:4':  3/4,
-  '4:1':  4/1,
-  '4:3':  4/3,
-  '4:5':  4/5,
-  '5:4':  5/4,
-  '8:1':  8/1,
-  '9:16': 9/16,
-  '16:9': 16/9,
-  '21:9': 21/9,
-};
-
 function parseRatio(r: string) {
   if (r === 'auto') return 0;
-  return availableRatios[r as keyof typeof availableRatios] || 1;
+  return ASPECT_RATIO_VALUES[r as AspectRatio] || 1;
 }
 
 function findClosestRatio(w: number, h: number): AspectRatio {
   const currentR = w / h;
-  let closest = '1:1' as AspectRatio;
+  const supportedRatios: readonly AspectRatio[] = props.availableRatios.length > 0 ? props.availableRatios : ['1:1'];
+  let closest = supportedRatios[0];
   let minDiff = Infinity;
-  for (const [name, val] of Object.entries(availableRatios)) {
-    const diff = Math.abs(val - currentR);
+  for (const name of supportedRatios) {
+    const diff = Math.abs(ASPECT_RATIO_VALUES[name] - currentR);
     if (diff < minDiff) {
       minDiff = diff;
-      closest = name as AspectRatio;
+      closest = name;
     }
   }
   return closest;
@@ -170,13 +156,13 @@ function handleMouseUp() {
         emit('update:ratio', closest);
         // Box will snap to this ratio automatically on next prop update if we trigger updateDrawBox?
         // Actually, let's artificially snap it right now.
-        snapBoxToRatio(availableRatios[closest]);
+        snapBoxToRatio(ASPECT_RATIO_VALUES[closest]);
      }
   } else if (mode.value.startsWith('resize-')) {
      if (props.targetRatio === 'auto') {
         const closest = findClosestRatio(boxMetrics.value.w, boxMetrics.value.h);
         emit('update:ratio', closest);
-        snapBoxToRatio(availableRatios[closest]);
+        snapBoxToRatio(ASPECT_RATIO_VALUES[closest]);
      }
   }
 
@@ -192,7 +178,7 @@ function updateDrawBox() {
   let targetR: number;
   if (props.targetRatio === 'auto') {
     const closest = findClosestRatio(w, h);
-    targetR = availableRatios[closest];
+    targetR = ASPECT_RATIO_VALUES[closest];
     emit('update:ratio', closest);
   } else {
     targetR = parseRatio(props.targetRatio);
@@ -232,7 +218,7 @@ function handleResize(e: MouseEvent, renderBox: any) {
   let r: number;
   if (props.targetRatio === 'auto') {
     const closest = findClosestRatio(absW, absH);
-    r = availableRatios[closest];
+    r = ASPECT_RATIO_VALUES[closest];
     emit('update:ratio', closest);
   } else {
     r = parseRatio(props.targetRatio);
