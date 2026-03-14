@@ -18,6 +18,7 @@ const isAutoResolution = ref(true);
 const isGenerating = ref(false);
 const errorMsg = ref('');
 const useSearchGrounding = ref(false);
+const thinkingLevel = ref<'Minimal' | 'High'>('Minimal');
 
 // Resolution steps — 512 is Flash-only
 const ALL_RESOLUTION_STEPS: { label: string; value: Resolution; px: number; flashOnly?: boolean }[] = [
@@ -102,7 +103,8 @@ async function onGenerate() {
          aspectRatio: aspectRatio.value,
          resolution: effectiveResolution,
          referenceImages: implicitRef ?? store.referenceImages,
-         useSearchGrounding: useSearchGrounding.value
+         useSearchGrounding: useSearchGrounding.value,
+         thinkingLevel: model.value === 'gemini-3.1-flash-image-preview' ? thinkingLevel.value : undefined
       };
 
       // Capture the exact workspace context we started in so we don't dump the result into a different one if user switches tabs
@@ -483,6 +485,18 @@ function confirmDelete() {
                         @click="resolution = step.value; isAutoResolution = false"
                         class="bg-background border border-border rounded py-1 text-xs transition-colors"
                         :class="{ 'border-primary text-primary': displayedResolution === step.value && !isAutoResolution, 'text-primary/40': displayedResolution === step.value && isAutoResolution }">{{ step.label }}</button>
+                  </div>
+               </div>
+
+               <div v-if="model === 'gemini-3.1-flash-image-preview'" class="flex flex-col gap-2">
+                  <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Thinking Level</label>
+                  <div class="grid grid-cols-2 gap-1">
+                     <button @click="thinkingLevel = 'Minimal'"
+                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
+                        :class="{ 'border-primary text-[#000] bg-primary font-bold': thinkingLevel === 'Minimal' }">Minimal</button>
+                     <button @click="thinkingLevel = 'High'"
+                        class="bg-background border border-border rounded py-1 text-xs transition-colors"
+                        :class="{ 'border-primary text-[#000] bg-primary font-bold': thinkingLevel === 'High' }">High</button>
                   </div>
                </div>
 
