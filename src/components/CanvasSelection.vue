@@ -2,9 +2,11 @@
 import { ref, computed } from 'vue';
 import { Check, X as XIcon } from 'lucide-vue-next';
 
+import type { AspectRatio } from '../services/geminiService';
+
 const props = defineProps<{
   imageSrc: string;
-  targetRatio: 'auto' | '16:9' | '1:1' | '9:16' | '4:3' | '3:4';
+  targetRatio: 'auto' | AspectRatio;
 }>();
 
 export interface CropData {
@@ -19,7 +21,8 @@ export interface CropData {
 
 const emit = defineEmits<{
   (e: 'cropped', data: CropData): void;
-  (e: 'update:ratio', ratio: '16:9' | '1:1' | '9:16' | '4:3' | '3:4'): void;
+  (e: 'update:ratio', ratio: AspectRatio): void;
+  (e: 'update:selectionPx', w: number, h: number): void;
 }>();
 
 const containerRef = ref<HTMLDivElement | null>(null);
@@ -31,12 +34,21 @@ const currentPos = ref({ x: 0, y: 0 });
 const boxMetrics = ref({ x: 0, y: 0, w: 0, h: 0 });
 const initialBox = ref({ x: 0, y: 0, w: 0, h: 0 });
 
-const availableRatios = {
+const availableRatios: Record<AspectRatio, number> = {
+  '1:1':  1/1,
+  '1:4':  1/4,
+  '1:8':  1/8,
+  '2:3':  2/3,
+  '3:2':  3/2,
+  '3:4':  3/4,
+  '4:1':  4/1,
+  '4:3':  4/3,
+  '4:5':  4/5,
+  '5:4':  5/4,
+  '8:1':  8/1,
+  '9:16': 9/16,
   '16:9': 16/9,
-  '4:3': 4/3,
-  '1:1': 1,
-  '3:4': 3/4,
-  '9:16': 9/16
+  '21:9': 21/9,
 };
 
 function parseRatio(r: string) {
@@ -44,15 +56,15 @@ function parseRatio(r: string) {
   return availableRatios[r as keyof typeof availableRatios] || 1;
 }
 
-function findClosestRatio(w: number, h: number): keyof typeof availableRatios {
+function findClosestRatio(w: number, h: number): AspectRatio {
   const currentR = w / h;
-  let closest = '1:1' as keyof typeof availableRatios;
+  let closest = '1:1' as AspectRatio;
   let minDiff = Infinity;
   for (const [name, val] of Object.entries(availableRatios)) {
     const diff = Math.abs(val - currentR);
     if (diff < minDiff) {
       minDiff = diff;
-      closest = name as keyof typeof availableRatios;
+      closest = name as AspectRatio;
     }
   }
   return closest;
@@ -79,6 +91,19 @@ function getImageRenderBox(img: HTMLImageElement, containerRect: DOMRect) {
 
 function clamp(val: number, min: number, max: number) {
   return Math.max(min, Math.min(max, val));
+}
+
+/** Emit the current selection size in natural image pixels (0,0 if no selection). */
+function emitSelectionPx() {
+  if (!imageRef.value || !containerRef.value || boxMetrics.value.w < 1 || boxMetrics.value.h < 1) {
+    emit('update:selectionPx', 0, 0);
+    return;
+  }
+  const containerRect = containerRef.value.getBoundingClientRect();
+  const renderBox = getImageRenderBox(imageRef.value, containerRect);
+  const scaleX = imageRef.value.naturalWidth / renderBox.w;
+  const scaleY = imageRef.value.naturalHeight / renderBox.h;
+  emit('update:selectionPx', Math.round(boxMetrics.value.w * scaleX), Math.round(boxMetrics.value.h * scaleY));
 }
 
 function handleMouseDown(e: MouseEvent) {
@@ -183,6 +208,7 @@ function updateDrawBox() {
   const y = startPos.value.y < currentPos.value.y ? startPos.value.y : startPos.value.y - h;
 
   boxMetrics.value = { x, y, w, h };
+  emitSelectionPx();
 }
 
 function handleResize(e: MouseEvent, renderBox: any) {
@@ -235,6 +261,7 @@ function handleResize(e: MouseEvent, renderBox: any) {
   if (y + h > renderBox.y + renderBox.h) h = renderBox.y + renderBox.h - y;
 
   boxMetrics.value = { x, y, w, h };
+  emitSelectionPx();
 }
 
 function snapBoxToRatio(targetR: number) {
@@ -292,6 +319,7 @@ function finalizeCrop() {
 function cancelCrop() {
   boxMetrics.value = { x: 0, y: 0, w: 0, h: 0 };
   mode.value = 'idle';
+  emit('update:selectionPx', 0, 0);
 }
 
 function selectAll() {
@@ -300,6 +328,11 @@ function selectAll() {
   const renderBox = getImageRenderBox(imageRef.value, containerRect);
   boxMetrics.value = { x: renderBox.x, y: renderBox.y, w: renderBox.w, h: renderBox.h };
   mode.value = 'idle';
+  // Emit the closest ratio matching the image's natural dimensions
+  const closest = findClosestRatio(imageRef.value.naturalWidth, imageRef.value.naturalHeight);
+  emit('update:ratio', closest);
+  // Emit full natural image size as selection px
+  emit('update:selectionPx', imageRef.value.naturalWidth, imageRef.value.naturalHeight);
 }
 
 // Watch for external ratio change to snap existing box
@@ -313,6 +346,7 @@ watch(() => props.targetRatio, (newR) => {
 defineExpose({
   finalizeCrop,
   selectAll,
+  imageRef,
   hasActiveSelection: computed(() => boxMetrics.value.w > 20 && boxMetrics.value.h > 20)
 });
 </script>
