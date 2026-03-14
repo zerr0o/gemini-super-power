@@ -480,15 +480,23 @@ function confirmDelete() {
 
          <main class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
             <div
-               class="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-surface/80 backdrop-blur-md px-4 py-2 rounded-full border border-border flex items-center gap-4 text-sm shadow-xl tooltip-container">
-               <span class="text-textMuted text-xs">Zoom: 100%</span>
-               <div class="w-px h-4 bg-border"></div>
-               <button class="hover:text-primary transition-colors flex items-center gap-1 text-xs"
-                  :class="{ 'text-primary': useSearchGrounding }" @click="useSearchGrounding = !useSearchGrounding"
-                  title="Enable Google Search Grounding to let the AI fetch realtime data for prompt accuracy.">
-                  <Search :size="12" /> Search Grounding
-                  <Info :size="10" class="opacity-50 inline-block" />
-               </button>
+               class="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-surface/80 backdrop-blur-md px-4 py-2 rounded-full border border-border flex items-center gap-4 text-sm shadow-xl tooltip-container">
+               <template v-if="isShowingParentPreview && activeParentImageNode">
+                  <span class="text-[11px] text-textMuted tracking-wide">
+                     Parent Preview: release <span class="text-textMain font-semibold">A</span> to return,
+                     press <span class="text-textMain font-semibold">Space</span> to restore this version
+                  </span>
+               </template>
+               <template v-else>
+                  <span class="text-textMuted text-xs">Zoom: 100%</span>
+                  <div class="w-px h-4 bg-border"></div>
+                  <button class="hover:text-primary transition-colors flex items-center gap-1 text-xs"
+                     :class="{ 'text-primary': useSearchGrounding }" @click="useSearchGrounding = !useSearchGrounding"
+                     title="Enable Google Search Grounding to let the AI fetch realtime data for prompt accuracy.">
+                     <Search :size="12" /> Search Grounding
+                     <Info :size="10" class="opacity-50 inline-block" />
+                  </button>
+               </template>
             </div>
 
             <div class="flex-1 flex overflow-hidden p-8"
@@ -504,11 +512,6 @@ function confirmDelete() {
                            class="absolute inset-0 z-30 flex items-center justify-center bg-[#111] pointer-events-none">
                            <img :src="activeParentImageNode.blobBase64"
                               class="max-w-full max-h-full object-contain shadow-2xl rounded" />
-                           <div
-                              class="absolute top-4 left-1/2 -translate-x-1/2 bg-surface/90 backdrop-blur-md px-4 py-2 rounded-full border border-border text-[11px] text-textMuted tracking-wide">
-                              Parent Preview: release <span class="text-textMain font-semibold">A</span> to return,
-                              press <span class="text-textMain font-semibold">Space</span> to restore this version
-                           </div>
                         </div>
                      </div>
                   </template>
