@@ -14,6 +14,7 @@ const store = useAppStore();
 
 const layerListRef = ref<HTMLDivElement | null>(null);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+const renderSurfaceRef = ref<HTMLDivElement | null>(null);
 const selectedLayerNodeId = ref<string | null>(null);
 const brushMode = ref<'hide' | 'reveal'>('hide');
 const brushRadius = ref(56);
@@ -25,6 +26,7 @@ const maskCanvas = ref<HTMLCanvasElement | null>(null);
 const layerImage = ref<HTMLImageElement | null>(null);
 const pointerPreview = ref<{ x: number; y: number; inside: boolean } | null>(null);
 const containerSize = ref({ width: 0, height: 0 });
+const loadError = ref('');
 
 let resizeObserver: ResizeObserver | null = null;
 let lastBrushPoint: { x: number; y: number } | null = null;
@@ -66,6 +68,12 @@ const canvasMetrics = computed(() => {
   };
 });
 
+function isTypingTarget(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  return el.isContentEditable || !!el.closest('input, textarea, select, [contenteditable="true"]');
+}
+
 function ensureSelectedLayer() {
   const stack = props.stack;
   if (!stack || stack.layers.length === 0) {
@@ -81,8 +89,8 @@ function ensureSelectedLayer() {
 }
 
 function updateContainerSize() {
-  if (!canvasRef.value?.parentElement) return;
-  const rect = canvasRef.value.parentElement.getBoundingClientRect();
+  if (!renderSurfaceRef.value) return;
+  const rect = renderSurfaceRef.value.getBoundingClientRect();
   containerSize.value = {
     width: Math.max(1, Math.round(rect.width)),
     height: Math.max(1, Math.round(rect.height)),
@@ -103,14 +111,24 @@ async function loadSelectedLayerAssets() {
   if (!layer) {
     maskCanvas.value = null;
     layerImage.value = null;
+    loadError.value = '';
     scheduleRender();
     return;
   }
 
-  layerImage.value = await loadCachedImage(layer.sourceDataUrl);
-  const nodeMask = selectedNode.value?.layerMask ?? layer.layerMask ?? null;
-  maskCanvas.value = await createMaskCanvas(nodeMask, layer.width, layer.height);
-  hasDirtyMask.value = false;
+  loadError.value = '';
+
+  try {
+    layerImage.value = await loadCachedImage(layer.sourceDataUrl || layer.finalResultDataUrl);
+    const nodeMask = selectedNode.value?.layerMask ?? layer.layerMask ?? null;
+    maskCanvas.value = await createMaskCanvas(nodeMask, layer.width, layer.height);
+    hasDirtyMask.value = false;
+  } catch (error) {
+    layerImage.value = null;
+    maskCanvas.value = null;
+    loadError.value = error instanceof Error ? error.message : 'Unable to load this layer preview.';
+  }
+
   scheduleRender();
 }
 
@@ -220,14 +238,15 @@ function stampBrush(x: number, y: number) {
   const gradient = ctx.createRadialGradient(x, y, innerRadius, x, y, brushRadius.value);
 
   if (brushMode.value === 'hide') {
-    gradient.addColorStop(0, 'rgba(0, 0, 0, 1)');
-    gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    gradient.addColorStop(0, 'rgb(0, 0, 0)');
+    gradient.addColorStop(1, 'rgb(255, 255, 255)');
   } else {
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    gradient.addColorStop(0, 'rgb(255, 255, 255)');
+    gradient.addColorStop(1, 'rgb(0, 0, 0)');
   }
 
   ctx.save();
+  ctx.globalCompositeOperation = brushMode.value === 'hide' ? 'darken' : 'lighten';
   ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.arc(x, y, brushRadius.value, 0, Math.PI * 2);
@@ -237,7 +256,7 @@ function stampBrush(x: number, y: number) {
 
 function paintBetweenPoints(from: { x: number; y: number }, to: { x: number; y: number }) {
   const distance = Math.hypot(to.x - from.x, to.y - from.y);
-  const spacing = Math.max(1, brushRadius.value * 0.2);
+  const spacing = Math.max(1, brushRadius.value * 0.35);
   const steps = Math.max(1, Math.ceil(distance / spacing));
 
   for (let step = 0; step <= steps; step += 1) {
@@ -334,7 +353,11 @@ watch(
 );
 
 watch(
-  () => [selectedLayerNodeId.value, props.stack?.activeNodeId ?? null, props.stack?.layers.length ?? 0],
+  () => [
+    selectedLayerNodeId.value,
+    props.stack?.activeNodeId ?? null,
+    props.stack?.layers.map(layer => `${layer.nodeId}:${layer.sourceDataUrl.length}:${layer.layerMask?.updatedAt ?? 0}`).join('|') ?? '',
+  ],
   async () => {
     await loadSelectedLayerAssets();
   },
@@ -354,21 +377,40 @@ watch(
   },
 );
 
+function handleWindowKeyDown(e: KeyboardEvent) {
+  const key = e.key.toLowerCase();
+  if (
+    key !== 'x'
+    || e.ctrlKey
+    || e.metaKey
+    || e.altKey
+    || e.repeat
+    || isTypingTarget(e.target)
+  ) {
+    return;
+  }
+
+  e.preventDefault();
+  brushMode.value = brushMode.value === 'hide' ? 'reveal' : 'hide';
+}
+
 onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
     updateContainerSize();
     scheduleRender();
   });
 
-  if (canvasRef.value?.parentElement) {
-    resizeObserver.observe(canvasRef.value.parentElement);
+  if (renderSurfaceRef.value) {
+    resizeObserver.observe(renderSurfaceRef.value);
   }
 
   updateContainerSize();
   scheduleRender();
+  window.addEventListener('keydown', handleWindowKeyDown);
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleWindowKeyDown);
   resizeObserver?.disconnect();
   if (renderFrame !== null) {
     cancelAnimationFrame(renderFrame);
@@ -477,8 +519,9 @@ onBeforeUnmount(() => {
             </span>
           </div>
 
-          <div class="flex-1 min-h-[360px] rounded-2xl border border-border bg-[#121212] overflow-hidden relative mask-editor-surface">
+          <div ref="renderSurfaceRef" class="flex-1 min-h-[360px] rounded-2xl border border-border bg-[#121212] overflow-hidden relative mask-editor-surface">
             <canvas
+              v-if="!loadError"
               ref="canvasRef"
               class="w-full h-full touch-none select-none"
               @pointerdown.prevent="handlePointerDown"
@@ -486,6 +529,11 @@ onBeforeUnmount(() => {
               @pointerup.prevent="handlePointerUp"
               @pointercancel.prevent="handlePointerUp"
               @pointerleave="handlePointerLeave" />
+            <div
+              v-else
+              class="absolute inset-0 flex items-center justify-center text-center px-6 text-sm text-red-200 bg-red-500/10">
+              {{ loadError }}
+            </div>
           </div>
         </div>
       </div>

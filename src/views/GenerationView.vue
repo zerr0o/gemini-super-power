@@ -824,6 +824,38 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
     return;
   }
 
+  if (
+    key === 'z'
+    && !e.ctrlKey
+    && !e.metaKey
+    && !e.altKey
+    && !e.repeat
+    && props.isActive
+    && !props.isShortcutSuspended
+    && activeSidebarTab.value === 'mask'
+    && !isTypingTarget(e.target)
+  ) {
+    e.preventDefault();
+    isMaskViewEnabled.value = !isMaskViewEnabled.value;
+    return;
+  }
+
+  if (
+    key === 'x'
+    && !e.ctrlKey
+    && !e.metaKey
+    && !e.altKey
+    && !e.repeat
+    && props.isActive
+    && !props.isShortcutSuspended
+    && activeSidebarTab.value === 'mask'
+    && !isTypingTarget(e.target)
+  ) {
+    e.preventDefault();
+    maskBrushMode.value = maskBrushMode.value === 'hide' ? 'reveal' : 'hide';
+    return;
+  }
+
   if (key === 'a') {
     if (!canUseParentShortcut(e.target)) return;
     e.preventDefault();
@@ -1330,7 +1362,7 @@ watch(() => store.activeNodeId, () => {
             <div class="min-w-0">
               <p class="text-[11px] uppercase tracking-[0.2em] text-textMuted">Live Brush</p>
               <p class="mt-1 text-xs text-textMuted/80">
-                Paint directly on the generation canvas. <span class="text-textMain">Ctrl+drag</span> pans and <span class="text-textMain">Ctrl+Z</span> undoes the last stroke.
+                Paint directly on the generation canvas. <span class="text-textMain">X</span> switches Hide/Reveal, <span class="text-textMain">Z</span> toggles Mask/Live View, <span class="text-textMain">Ctrl+drag</span> pans, and <span class="text-textMain">Ctrl+Z</span> undoes the last stroke.
               </p>
             </div>
             <Brush :size="16" :class="isMaskEditorEnabled ? 'text-primary' : 'text-textMuted/50'" />

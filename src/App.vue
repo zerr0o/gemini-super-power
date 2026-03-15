@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { Check, Download, Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
+import { Brush, Check, Download, Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import GenerationView from './views/GenerationView.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import NodeInspector from './components/NodeInspector.vue';
+import LayerMaskWorkspace from './components/LayerMaskWorkspace.vue';
 import { useAppStore } from './stores/appStore';
 import { buildBranchLayerStack } from './services/layerExport';
 
-type AppTab = 'generation' | 'history' | 'tools' | 'settings';
+type AppTab = 'generation' | 'history' | 'tools' | 'masks' | 'settings';
 
 const activeTab = ref<AppTab>('generation');
 const store = useAppStore();
@@ -194,6 +195,10 @@ function confirmDelete() {
                :class="{ 'text-primary': activeTab === 'tools' }" @click="activeTab = 'tools'" title="Tools & Layers">
                <Layers :size="20" />
             </button>
+            <button class="p-2 rounded-lg hover:bg-surfaceHover transition-colors"
+               :class="{ 'text-primary': activeTab === 'masks' }" @click="activeTab = 'masks'" title="Layer Mask Studio">
+               <Brush :size="20" />
+            </button>
             <div class="flex-1"></div>
             <button class="p-2 rounded-lg hover:bg-surfaceHover transition-colors text-textMuted"
                :class="{ 'text-primary': activeTab === 'settings' }" @click="activeTab = 'settings'" title="Settings">
@@ -213,6 +218,9 @@ function confirmDelete() {
                </template>
                <template v-else-if="activeTab === 'tools'">
                   <NodeInspector />
+               </template>
+               <template v-else-if="activeTab === 'masks'">
+                  <LayerMaskWorkspace />
                </template>
 
                <template v-else-if="activeTab === 'settings'">
