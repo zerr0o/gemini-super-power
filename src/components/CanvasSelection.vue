@@ -4,6 +4,8 @@ import { Check, Plus, Star, X as XIcon } from 'lucide-vue-next';
 
 import { ASPECT_RATIO_VALUES } from '../services/geminiService';
 import type { AspectRatio } from '../services/geminiService';
+import type { LayerMaskPayload } from '../stores/appStore';
+import { createAlphaMaskCanvas, createMaskCanvas, loadCachedImage, renderLayerComposite } from '../services/layerRendering';
 
 const props = withDefaults(defineProps<{
   imageSrc: string;
@@ -14,12 +16,30 @@ const props = withDefaults(defineProps<{
   overlayOpacity?: number;
   hasExplicitPrimaryReference?: boolean;
   canAddSecondaryReference?: boolean;
+  liveLayers?: MaskEditableLayer[] | null;
+  liveDocumentWidth?: number | null;
+  liveDocumentHeight?: number | null;
+  maskEditEnabled?: boolean;
+  maskTargetNodeId?: string | null;
+  maskBrushRadius?: number;
+  maskBrushHardness?: number;
+  maskBrushMode?: 'hide' | 'reveal';
+  maskViewEnabled?: boolean;
 }>(), {
   previewSrc: null,
   overlaySrc: null,
   overlayOpacity: 0.5,
   hasExplicitPrimaryReference: false,
   canAddSecondaryReference: true,
+  liveLayers: null,
+  liveDocumentWidth: null,
+  liveDocumentHeight: null,
+  maskEditEnabled: false,
+  maskTargetNodeId: null,
+  maskBrushRadius: 56,
+  maskBrushHardness: 0.72,
+  maskBrushMode: 'hide',
+  maskViewEnabled: false,
 });
 
 export interface CropData {
@@ -40,11 +60,30 @@ export interface CanvasViewState {
   canPan: boolean;
 }
 
+export interface MaskEditableLayer {
+  nodeId: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  sourceDataUrl: string;
+  layerMask?: LayerMaskPayload | null;
+}
+
+export interface MaskEditorState {
+  canUndo: boolean;
+  hasMask: boolean;
+  isDirty: boolean;
+  targetNodeId: string | null;
+}
+
 const emit = defineEmits<{
   (e: 'cropped', data: CropData, action: CropConfirmAction): void;
   (e: 'update:ratio', ratio: AspectRatio): void;
   (e: 'update:selectionPx', w: number, h: number): void;
   (e: 'update:view', state: CanvasViewState): void;
+  (e: 'mask-updated', payload: { nodeId: string; mask: LayerMaskPayload | null }): void;
+  (e: 'mask-state-change', state: MaskEditorState): void;
 }>();
 
 const MIN_ZOOM = 1;
@@ -53,6 +92,7 @@ const ZOOM_STEP = 0.1;
 
 const containerRef = ref<HTMLDivElement | null>(null);
 const imageRef = ref<HTMLImageElement | null>(null);
+const liveCompositeCanvasRef = ref<HTMLCanvasElement | null>(null);
 
 const mode = ref<'idle' | 'draw' | 'drag' | 'resize-nw' | 'resize-ne' | 'resize-se' | 'resize-sw' | 'pan'>('idle');
 const startPos = ref({ x: 0, y: 0 });
@@ -64,8 +104,25 @@ const zoom = ref(1);
 const panOffset = ref({ x: 0, y: 0 });
 const naturalSize = ref({ width: 0, height: 0 });
 const containerSize = ref({ width: 0, height: 0 });
+const isMaskPainting = ref(false);
+const maskCanvas = ref<HTMLCanvasElement | null>(null);
+const alphaMaskCanvas = ref<HTMLCanvasElement | null>(null);
+const hasDirtyMask = ref(false);
+const maskPointerPreview = ref<{ x: number; y: number; inside: boolean } | null>(null);
+const selectedLayerImage = ref<HTMLImageElement | null>(null);
+const staticUnderlayCanvas = ref<HTMLCanvasElement | null>(null);
+const staticOverlayCanvas = ref<HTMLCanvasElement | null>(null);
+const selectedLayerRenderCanvas = ref<HTMLCanvasElement | null>(null);
+const currentMaskNodeId = ref<string | null>(null);
+const currentMaskDataUrl = ref<string | null>(null);
 
 let resizeObserver: ResizeObserver | null = null;
+let liveCompositeFrame: number | null = null;
+let liveCompositeRenderToken = 0;
+let liveCompositeCacheToken = 0;
+let lastMaskPoint: { x: number; y: number } | null = null;
+let isAlphaMaskDirty = true;
+const maskUndoStack: HTMLCanvasElement[] = [];
 
 function parseRatio(r: string) {
   if (r === 'auto') return 0;
@@ -130,6 +187,19 @@ const renderBox = computed(() => {
 
 const zoomPercent = computed(() => Math.round(zoom.value * 100));
 const canPan = computed(() => zoom.value > 1.001);
+const selectedMaskLayer = computed(() =>
+  props.liveLayers?.find(layer => layer.nodeId === props.maskTargetNodeId) || null
+);
+const selectedMaskLayerIndex = computed(() =>
+  props.liveLayers?.findIndex(layer => layer.nodeId === props.maskTargetNodeId) ?? -1
+);
+const shouldRenderLiveComposite = computed(() =>
+  !!props.liveLayers?.length
+  && !!props.liveDocumentWidth
+  && !!props.liveDocumentHeight
+  && !!selectedMaskLayer.value
+  && props.maskEditEnabled
+);
 
 const stageStyle = computed(() => {
   const box = renderBox.value;
@@ -153,6 +223,93 @@ function emitViewState() {
   });
 }
 
+function cloneCanvas(source: HTMLCanvasElement) {
+  const clone = document.createElement('canvas');
+  clone.width = source.width;
+  clone.height = source.height;
+  const ctx = clone.getContext('2d');
+  if (ctx) {
+    ctx.drawImage(source, 0, 0);
+  }
+  return clone;
+}
+
+function pushMaskUndoSnapshot() {
+  if (!maskCanvas.value) return;
+  maskUndoStack.push(cloneCanvas(maskCanvas.value));
+  if (maskUndoStack.length > 24) {
+    maskUndoStack.shift();
+  }
+}
+
+function emitMaskState() {
+  emit('mask-state-change', {
+    canUndo: maskUndoStack.length > 0,
+    hasMask: !!currentMaskDataUrl.value || hasDirtyMask.value,
+    isDirty: hasDirtyMask.value,
+    targetNodeId: selectedMaskLayer.value?.nodeId || null,
+  });
+}
+
+function serializeMaskCanvas(canvas: HTMLCanvasElement): LayerMaskPayload | null {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let hasVisibleMaskChange = false;
+  for (let i = 0; i < imageData.length; i += 4) {
+    if (
+      imageData[i] !== 255
+      || imageData[i + 1] !== 255
+      || imageData[i + 2] !== 255
+      || imageData[i + 3] !== 255
+    ) {
+      hasVisibleMaskChange = true;
+      break;
+    }
+  }
+
+  if (!hasVisibleMaskChange) {
+    return null;
+  }
+
+  return {
+    dataUrl: canvas.toDataURL('image/png'),
+    width: canvas.width,
+    height: canvas.height,
+    updatedAt: Date.now(),
+  };
+}
+
+function syncAlphaMaskCanvas() {
+  if (!maskCanvas.value) {
+    alphaMaskCanvas.value = null;
+    isAlphaMaskDirty = false;
+    return;
+  }
+
+  if (!isAlphaMaskDirty && alphaMaskCanvas.value) return;
+  alphaMaskCanvas.value = createAlphaMaskCanvas(maskCanvas.value);
+  isAlphaMaskDirty = false;
+}
+
+function clearLiveCompositeCaches() {
+  staticUnderlayCanvas.value = null;
+  staticOverlayCanvas.value = null;
+  selectedLayerImage.value = null;
+  selectedLayerRenderCanvas.value = null;
+  liveCompositeCacheToken += 1;
+}
+
+function scheduleLiveCompositeRender() {
+  if (liveCompositeFrame !== null) return;
+
+  liveCompositeFrame = requestAnimationFrame(() => {
+    liveCompositeFrame = null;
+    void renderLiveComposite();
+  });
+}
+
 function updateLayoutMetrics() {
   if (containerRef.value) {
     const rect = containerRef.value.getBoundingClientRect();
@@ -167,6 +324,94 @@ function updateLayoutMetrics() {
   }
 
   panOffset.value = clampPan(panOffset.value);
+}
+
+async function loadMaskEditorState() {
+  const layer = selectedMaskLayer.value;
+  if (!layer) {
+    maskCanvas.value = null;
+    alphaMaskCanvas.value = null;
+    currentMaskNodeId.value = null;
+    currentMaskDataUrl.value = null;
+    isAlphaMaskDirty = false;
+    maskUndoStack.length = 0;
+    hasDirtyMask.value = false;
+    clearLiveCompositeCaches();
+    emitMaskState();
+    scheduleLiveCompositeRender();
+    return;
+  }
+
+  const nextMaskDataUrl = layer.layerMask?.dataUrl ?? null;
+  if (
+    maskCanvas.value
+    && currentMaskNodeId.value === layer.nodeId
+    && currentMaskDataUrl.value === nextMaskDataUrl
+  ) {
+    emitMaskState();
+    scheduleLiveCompositeRender();
+    return;
+  }
+
+  maskCanvas.value = await createMaskCanvas(layer.layerMask ?? null, layer.width, layer.height);
+  isAlphaMaskDirty = true;
+  currentMaskNodeId.value = layer.nodeId;
+  currentMaskDataUrl.value = nextMaskDataUrl;
+  maskUndoStack.length = 0;
+  hasDirtyMask.value = false;
+  clearLiveCompositeCaches();
+  emitMaskState();
+  scheduleLiveCompositeRender();
+}
+
+async function rebuildLiveCompositeCaches() {
+  const layer = selectedMaskLayer.value;
+  const layers = props.liveLayers;
+  const documentWidth = props.liveDocumentWidth;
+  const documentHeight = props.liveDocumentHeight;
+  const selectedIndex = selectedMaskLayerIndex.value;
+  const box = renderBox.value;
+
+  if (
+    !shouldRenderLiveComposite.value
+    || !layer
+    || !layers
+    || !documentWidth
+    || !documentHeight
+    || !box
+    || selectedIndex < 0
+  ) {
+    clearLiveCompositeCaches();
+    return;
+  }
+
+  const targetWidth = Math.max(1, Math.round(box.w));
+  const targetHeight = Math.max(1, Math.round(box.h));
+  const cacheToken = ++liveCompositeCacheToken;
+
+  const underlayLayers = layers.slice(0, selectedIndex);
+  const overlayLayers = layers.slice(selectedIndex + 1);
+  const [underlayCanvas, overlayCanvas, layerImage] = await Promise.all([
+    underlayLayers.length > 0
+      ? renderLayerComposite(underlayLayers, documentWidth, documentHeight, {
+          targetWidth,
+          targetHeight,
+        })
+      : Promise.resolve(null),
+    overlayLayers.length > 0
+      ? renderLayerComposite(overlayLayers, documentWidth, documentHeight, {
+          targetWidth,
+          targetHeight,
+        })
+      : Promise.resolve(null),
+    loadCachedImage(layer.sourceDataUrl),
+  ]);
+
+  if (cacheToken !== liveCompositeCacheToken) return;
+
+  staticUnderlayCanvas.value = underlayCanvas;
+  staticOverlayCanvas.value = overlayCanvas;
+  selectedLayerImage.value = layerImage;
 }
 
 function clampPan(nextPan: { x: number; y: number }, nextZoom = zoom.value) {
@@ -233,6 +478,133 @@ function resetView() {
   emitViewState();
 }
 
+function drawMaskCursor(ctx: CanvasRenderingContext2D) {
+  const pointer = maskPointerPreview.value;
+  if (!pointer?.inside || !renderBox.value || !selectedMaskLayer.value) return;
+
+  const docScale = renderBox.value.w / Math.max(1, naturalSize.value.width);
+  const cursorRadius = props.maskBrushRadius * docScale;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(pointer.x, pointer.y, cursorRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = props.maskBrushMode === 'hide'
+    ? 'rgba(255, 110, 110, 0.95)'
+    : 'rgba(255, 255, 255, 0.92)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+async function renderLiveComposite() {
+  const canvas = liveCompositeCanvasRef.value;
+  const box = renderBox.value;
+  const layer = selectedMaskLayer.value;
+  if (!canvas || !box) return;
+
+  const pixelWidth = Math.max(1, Math.round(box.w));
+  const pixelHeight = Math.max(1, Math.round(box.h));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!shouldRenderLiveComposite.value || !layer || !props.liveLayers || !props.liveDocumentWidth || !props.liveDocumentHeight) {
+    return;
+  }
+
+  const renderToken = ++liveCompositeRenderToken;
+
+  if (!selectedLayerImage.value) {
+    await rebuildLiveCompositeCaches();
+    if (renderToken !== liveCompositeRenderToken) return;
+  }
+
+  syncAlphaMaskCanvas();
+
+  const drawScaleX = canvas.width / props.liveDocumentWidth;
+  const drawScaleY = canvas.height / props.liveDocumentHeight;
+  const drawLeft = Math.round(layer.left * drawScaleX);
+  const drawTop = Math.round(layer.top * drawScaleY);
+  const drawWidth = Math.max(1, Math.round(layer.width * drawScaleX));
+  const drawHeight = Math.max(1, Math.round(layer.height * drawScaleY));
+
+  if (staticUnderlayCanvas.value) {
+    ctx.drawImage(staticUnderlayCanvas.value, 0, 0, canvas.width, canvas.height);
+  }
+
+  if (selectedLayerImage.value && alphaMaskCanvas.value) {
+    if (
+      !selectedLayerRenderCanvas.value
+      || selectedLayerRenderCanvas.value.width !== drawWidth
+      || selectedLayerRenderCanvas.value.height !== drawHeight
+    ) {
+      selectedLayerRenderCanvas.value = document.createElement('canvas');
+      selectedLayerRenderCanvas.value.width = drawWidth;
+      selectedLayerRenderCanvas.value.height = drawHeight;
+    }
+
+    const selectedCtx = selectedLayerRenderCanvas.value.getContext('2d');
+    if (selectedCtx) {
+      selectedCtx.clearRect(0, 0, drawWidth, drawHeight);
+      selectedCtx.drawImage(selectedLayerImage.value, 0, 0, drawWidth, drawHeight);
+      selectedCtx.globalCompositeOperation = 'destination-in';
+      selectedCtx.drawImage(alphaMaskCanvas.value, 0, 0, drawWidth, drawHeight);
+      selectedCtx.globalCompositeOperation = 'source-over';
+    }
+  }
+
+  if (props.maskViewEnabled && maskCanvas.value) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.94)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (staticUnderlayCanvas.value || staticOverlayCanvas.value || selectedLayerRenderCanvas.value) {
+      ctx.save();
+      ctx.globalAlpha = 0.18;
+      if (staticUnderlayCanvas.value) {
+        ctx.drawImage(staticUnderlayCanvas.value, 0, 0, canvas.width, canvas.height);
+      }
+      if (selectedLayerRenderCanvas.value) {
+        ctx.drawImage(selectedLayerRenderCanvas.value, drawLeft, drawTop, drawWidth, drawHeight);
+      }
+      if (staticOverlayCanvas.value) {
+        ctx.drawImage(staticOverlayCanvas.value, 0, 0, canvas.width, canvas.height);
+      }
+      ctx.restore();
+    }
+
+    ctx.drawImage(
+      maskCanvas.value,
+      drawLeft,
+      drawTop,
+      drawWidth,
+      drawHeight,
+    );
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.72)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(
+      drawLeft + 0.5,
+      drawTop + 0.5,
+      drawWidth - 1,
+      drawHeight - 1,
+    );
+  } else {
+    if (selectedLayerRenderCanvas.value) {
+      ctx.drawImage(selectedLayerRenderCanvas.value, drawLeft, drawTop, drawWidth, drawHeight);
+    }
+    if (staticOverlayCanvas.value) {
+      ctx.drawImage(staticOverlayCanvas.value, 0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  drawMaskCursor(ctx);
+}
+
 function getLocalPoint(clientX: number, clientY: number) {
   const box = renderBox.value;
   const containerRect = containerRef.value?.getBoundingClientRect();
@@ -249,6 +621,49 @@ function getLocalPoint(clientX: number, clientY: number) {
   };
 }
 
+function getDocumentPoint(clientX: number, clientY: number) {
+  const localPoint = getLocalPoint(clientX, clientY);
+  const box = renderBox.value;
+  if (!localPoint || !box || naturalSize.value.width < 1 || naturalSize.value.height < 1) return null;
+
+  return {
+    localX: localPoint.x,
+    localY: localPoint.y,
+    docX: (localPoint.x / box.w) * naturalSize.value.width,
+    docY: (localPoint.y / box.h) * naturalSize.value.height,
+  };
+}
+
+function getMaskPoint(clientX: number, clientY: number) {
+  const layer = selectedMaskLayer.value;
+  const editableMask = maskCanvas.value;
+  const point = getDocumentPoint(clientX, clientY);
+  if (!layer || !editableMask || !point) {
+    maskPointerPreview.value = null;
+    return null;
+  }
+
+  const inside = (
+    point.docX >= layer.left
+    && point.docX <= layer.left + layer.width
+    && point.docY >= layer.top
+    && point.docY <= layer.top + layer.height
+  );
+
+  maskPointerPreview.value = {
+    x: point.localX,
+    y: point.localY,
+    inside,
+  };
+
+  if (!inside) return null;
+
+  return {
+    x: ((point.docX - layer.left) / Math.max(1, layer.width)) * editableMask.width,
+    y: ((point.docY - layer.top) / Math.max(1, layer.height)) * editableMask.height,
+  };
+}
+
 function emitSelectionPx() {
   const box = renderBox.value;
   if (!imageRef.value || !box || boxMetrics.value.w < 1 || boxMetrics.value.h < 1) {
@@ -259,6 +674,82 @@ function emitSelectionPx() {
   const scaleX = imageRef.value.naturalWidth / box.w;
   const scaleY = imageRef.value.naturalHeight / box.h;
   emit('update:selectionPx', Math.round(boxMetrics.value.w * scaleX), Math.round(boxMetrics.value.h * scaleY));
+}
+
+function stampMaskBrush(x: number, y: number) {
+  const editableMask = maskCanvas.value;
+  if (!editableMask) return;
+
+  const ctx = editableMask.getContext('2d');
+  if (!ctx) return;
+
+  const hardness = Math.min(0.99, Math.max(0, props.maskBrushHardness));
+  const innerRadius = props.maskBrushRadius * hardness;
+  const gradient = ctx.createRadialGradient(x, y, innerRadius, x, y, props.maskBrushRadius);
+
+  if (props.maskBrushMode === 'hide') {
+    gradient.addColorStop(0, 'rgb(0, 0, 0)');
+    gradient.addColorStop(1, 'rgb(255, 255, 255)');
+  } else {
+    gradient.addColorStop(0, 'rgb(255, 255, 255)');
+    gradient.addColorStop(1, 'rgb(0, 0, 0)');
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = props.maskBrushMode === 'hide' ? 'darken' : 'lighten';
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(x, y, props.maskBrushRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  isAlphaMaskDirty = true;
+}
+
+function paintMaskBetweenPoints(from: { x: number; y: number }, to: { x: number; y: number }) {
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
+  const spacing = Math.max(1, props.maskBrushRadius * 0.35);
+  const steps = Math.max(1, Math.ceil(distance / spacing));
+
+  for (let step = 0; step <= steps; step += 1) {
+    const t = steps === 0 ? 0 : step / steps;
+    stampMaskBrush(
+      from.x + ((to.x - from.x) * t),
+      from.y + ((to.y - from.y) * t),
+    );
+  }
+}
+
+async function persistMask() {
+  const layer = selectedMaskLayer.value;
+  const editableMask = maskCanvas.value;
+  if (!layer || !editableMask || !hasDirtyMask.value) return;
+
+  const serializedMask = serializeMaskCanvas(editableMask);
+  currentMaskNodeId.value = layer.nodeId;
+  currentMaskDataUrl.value = serializedMask?.dataUrl ?? null;
+  emit('mask-updated', {
+    nodeId: layer.nodeId,
+    mask: serializedMask,
+  });
+  hasDirtyMask.value = false;
+  emitMaskState();
+}
+
+function startMaskPainting(e: MouseEvent) {
+  const layerPoint = getMaskPoint(e.clientX, e.clientY);
+  if (!layerPoint || !maskCanvas.value) {
+    scheduleLiveCompositeRender();
+    return;
+  }
+
+  pushMaskUndoSnapshot();
+  isMaskPainting.value = true;
+  lastMaskPoint = layerPoint;
+  stampMaskBrush(layerPoint.x, layerPoint.y);
+  hasDirtyMask.value = true;
+  emitMaskState();
+  scheduleLiveCompositeRender();
 }
 
 function startPan(e: MouseEvent) {
@@ -273,6 +764,11 @@ function handleMouseDown(e: MouseEvent) {
 
   if (e.ctrlKey && canPan.value) {
     startPan(e);
+    return;
+  }
+
+  if (props.maskEditEnabled && selectedMaskLayer.value) {
+    startMaskPainting(e);
     return;
   }
 
@@ -308,16 +804,36 @@ function startResize(corner: string, e: MouseEvent) {
 }
 
 function handleMouseMove(e: MouseEvent) {
-  const box = renderBox.value;
-  if (mode.value === 'idle' || !box) return;
-
   if (mode.value === 'pan') {
     panOffset.value = clampPan({
       x: initialPan.value.x + (e.clientX - startPos.value.x),
       y: initialPan.value.y + (e.clientY - startPos.value.y),
     });
+    scheduleLiveCompositeRender();
     return;
   }
+
+  if (props.maskEditEnabled && selectedMaskLayer.value) {
+    const layerPoint = getMaskPoint(e.clientX, e.clientY);
+    if (isMaskPainting.value && layerPoint) {
+      if (!lastMaskPoint) {
+        lastMaskPoint = layerPoint;
+      }
+
+      paintMaskBetweenPoints(lastMaskPoint, layerPoint);
+      lastMaskPoint = layerPoint;
+      hasDirtyMask.value = true;
+      emitMaskState();
+    }
+
+    scheduleLiveCompositeRender();
+    if (isMaskPainting.value || layerPoint || maskPointerPreview.value) {
+      return;
+    }
+  }
+
+  const box = renderBox.value;
+  if (mode.value === 'idle' || !box) return;
 
   if (mode.value === 'draw') {
     const point = getLocalPoint(e.clientX, e.clientY);
@@ -344,7 +860,28 @@ function handleMouseMove(e: MouseEvent) {
   }
 }
 
-function handleMouseUp() {
+function handleMouseLeave() {
+  if (props.maskEditEnabled) {
+    maskPointerPreview.value = null;
+    scheduleLiveCompositeRender();
+  }
+}
+
+async function handleMouseUp() {
+  if (isMaskPainting.value) {
+    isMaskPainting.value = false;
+    lastMaskPoint = null;
+    await persistMask();
+    scheduleLiveCompositeRender();
+    return;
+  }
+
+  if (props.maskEditEnabled) {
+    mode.value = 'idle';
+    scheduleLiveCompositeRender();
+    return;
+  }
+
   if (mode.value === 'idle') return;
 
   if (mode.value === 'draw' && boxMetrics.value.w > 20) {
@@ -531,7 +1068,55 @@ function cancelCrop() {
   emit('update:selectionPx', 0, 0);
 }
 
+function undoMaskStroke() {
+  const previousMask = maskUndoStack.pop();
+  const layer = selectedMaskLayer.value;
+  if (!previousMask || !layer) return;
+
+  maskCanvas.value = cloneCanvas(previousMask);
+  isAlphaMaskDirty = true;
+  hasDirtyMask.value = false;
+  currentMaskNodeId.value = layer.nodeId;
+  currentMaskDataUrl.value = serializeMaskCanvas(maskCanvas.value)?.dataUrl ?? null;
+  emit('mask-updated', {
+    nodeId: layer.nodeId,
+    mask: serializeMaskCanvas(maskCanvas.value),
+  });
+  emitMaskState();
+  scheduleLiveCompositeRender();
+}
+
+function resetMaskStroke() {
+  const layer = selectedMaskLayer.value;
+  if (!layer) return;
+
+  if (maskCanvas.value) {
+    pushMaskUndoSnapshot();
+  }
+
+  maskCanvas.value = document.createElement('canvas');
+  maskCanvas.value.width = layer.width;
+  maskCanvas.value.height = layer.height;
+  const ctx = maskCanvas.value.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = 'rgb(255, 255, 255)';
+    ctx.fillRect(0, 0, maskCanvas.value.width, maskCanvas.value.height);
+  }
+
+  isAlphaMaskDirty = true;
+  hasDirtyMask.value = false;
+  currentMaskNodeId.value = layer.nodeId;
+  currentMaskDataUrl.value = null;
+  emit('mask-updated', {
+    nodeId: layer.nodeId,
+    mask: null,
+  });
+  emitMaskState();
+  scheduleLiveCompositeRender();
+}
+
 function selectAll() {
+  if (props.maskEditEnabled) return;
   const box = renderBox.value;
   if (!imageRef.value || !box) return;
 
@@ -545,6 +1130,7 @@ function selectAll() {
 function handleImageLoad() {
   updateLayoutMetrics();
   emitViewState();
+  scheduleLiveCompositeRender();
 }
 
 watch(() => props.targetRatio, (newR) => {
@@ -556,20 +1142,75 @@ watch(() => props.targetRatio, (newR) => {
 watch(() => props.imageSrc, () => {
   resetView();
   cancelCrop();
+  maskPointerPreview.value = null;
+  clearLiveCompositeCaches();
+  scheduleLiveCompositeRender();
 });
 
 watch(
+  () => [
+    props.maskTargetNodeId,
+    selectedMaskLayer.value?.layerMask?.updatedAt ?? 0,
+    props.liveLayers?.length ?? 0,
+  ],
+  async () => {
+    if (isMaskPainting.value) return;
+    await loadMaskEditorState();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [
+    props.maskTargetNodeId,
+    props.maskEditEnabled,
+    props.liveDocumentWidth,
+    props.liveDocumentHeight,
+    props.liveLayers?.map(layer => `${layer.nodeId}:${layer.sourceDataUrl.length}:${layer.layerMask?.updatedAt ?? 0}`).join('|') ?? '',
+    renderBox.value?.w ?? 0,
+    renderBox.value?.h ?? 0,
+  ],
+  async () => {
+    await rebuildLiveCompositeCaches();
+    emitMaskState();
+    scheduleLiveCompositeRender();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [
+    props.maskViewEnabled,
+    props.maskBrushRadius,
+    props.maskBrushHardness,
+    props.maskBrushMode,
+  ],
+  () => {
+    emitMaskState();
+    scheduleLiveCompositeRender();
+  },
+  { immediate: true },
+);
+
+watch(
   () => [zoom.value, panOffset.value.x, panOffset.value.y],
-  () => emitViewState(),
+  () => {
+    emitViewState();
+    scheduleLiveCompositeRender();
+  },
   { immediate: true },
 );
 
 onMounted(() => {
-  resizeObserver = new ResizeObserver(() => updateLayoutMetrics());
+  resizeObserver = new ResizeObserver(() => {
+    updateLayoutMetrics();
+    scheduleLiveCompositeRender();
+  });
   if (containerRef.value) {
     resizeObserver.observe(containerRef.value);
   }
   updateLayoutMetrics();
+  scheduleLiveCompositeRender();
   if (imageRef.value?.complete) {
     handleImageLoad();
   }
@@ -577,17 +1218,24 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
+  if (liveCompositeFrame !== null) {
+    cancelAnimationFrame(liveCompositeFrame);
+  }
 });
 
 defineExpose({
   finalizeCrop,
+  cancelCrop,
   selectAll,
+  undoMaskStroke,
+  resetMaskStroke,
   imageRef,
   zoomIn,
   zoomOut,
   resetView,
   zoomPercent,
   hasActiveSelection: computed(() => boxMetrics.value.w > 20 && boxMetrics.value.h > 20),
+  canUndoMask: computed(() => maskUndoStack.length > 0),
 });
 </script>
 
@@ -598,7 +1246,7 @@ defineExpose({
     @mousedown.prevent="handleMouseDown"
     @mousemove.prevent="handleMouseMove"
     @mouseup.prevent="handleMouseUp"
-    @mouseleave.prevent="handleMouseUp"
+    @mouseleave.prevent="handleMouseLeave(); handleMouseUp()"
     @dblclick.prevent="selectAll"
     @wheel.prevent="handleWheel">
 
@@ -617,7 +1265,16 @@ defineExpose({
       </div>
 
       <div class="absolute z-0" :style="stageStyle">
-        <img :src="imageSrc" class="w-full h-full object-fill pointer-events-none shadow-2xl rounded" draggable="false" />
+        <canvas
+          v-if="shouldRenderLiveComposite"
+          ref="liveCompositeCanvasRef"
+          class="absolute inset-0 w-full h-full pointer-events-none shadow-2xl rounded">
+        </canvas>
+        <img
+          v-else
+          :src="imageSrc"
+          class="w-full h-full object-fill pointer-events-none shadow-2xl rounded"
+          draggable="false" />
         <img
           v-if="overlaySrc"
           :src="overlaySrc"
@@ -626,7 +1283,7 @@ defineExpose({
           draggable="false" />
 
         <div
-          v-if="boxMetrics.w > 0"
+          v-if="!props.maskEditEnabled && boxMetrics.w > 0"
           class="absolute border-2 border-primary z-20 cursor-move"
           :style="{ left: boxMetrics.x + 'px', top: boxMetrics.y + 'px', width: boxMetrics.w + 'px', height: boxMetrics.h + 'px', boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)' }"
           @mousedown.stop="startDrag">

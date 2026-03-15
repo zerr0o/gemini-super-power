@@ -5,6 +5,7 @@ import GenerationView from './views/GenerationView.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import NodeInspector from './components/NodeInspector.vue';
 import { useAppStore } from './stores/appStore';
+import { buildBranchLayerStack } from './services/layerExport';
 
 type AppTab = 'generation' | 'history' | 'tools' | 'settings';
 
@@ -47,13 +48,19 @@ function triggerBrowserDownload(fileName: string, dataUrl: string) {
 
 async function exportActiveNodePng() {
    const node = activeImageNode.value;
-   const dataUrl = node?.finalResultBase64 || node?.blobBase64 || '';
-   if (!node || !dataUrl) return;
+   if (!node) return;
 
    quickExportState.value = 'saving';
    const fileName = buildQuickExportFileName();
 
    try {
+      const stack = await buildBranchLayerStack(store.nodes, store.activeNodeId, store.activeWorkspace?.name || 'workspace');
+      const dataUrl = stack.finalCompositeDataUrl || node.finalResultBase64 || node.blobBase64 || '';
+      if (!dataUrl) {
+         quickExportState.value = 'error';
+         return;
+      }
+
       const savedPath = await window.ipcRenderer?.invoke('desktop:save-file', {
          title: 'Export Current PNG',
          defaultPath: fileName,

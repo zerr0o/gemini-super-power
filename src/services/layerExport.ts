@@ -1,4 +1,5 @@
 import type { ImageNode, ReferenceImageAsset } from '../stores/appStore';
+import { createMaskedLayerCanvas, loadCachedImage, renderLayerComposite } from './layerRendering';
 
 export type BranchLayerKind = 'root' | 'patch' | 'full-frame';
 type ExportFileEncoding = 'utf8' | 'base64' | 'data-url';
@@ -19,6 +20,7 @@ export interface BranchLayer {
   createdAt: number;
   sourceUri: string | null;
   modificationBox: ImageNode['modificationBox'];
+  layerMask: ImageNode['layerMask'];
   references: ReferenceImageAsset[];
   finalResultDataUrl: string;
   geminiResultDataUrl: string | null;
@@ -128,15 +130,6 @@ export function buildNodeLineage(nodes: ImageNode[], activeNodeId: string | null
   return lineage.reverse();
 }
 
-function loadImage(dataUrl: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Unable to decode image payload for export.'));
-    img.src = dataUrl;
-  });
-}
-
 async function rasterizeDataUrl(
   dataUrl: string,
   width?: number,
@@ -147,7 +140,7 @@ async function rasterizeDataUrl(
   rgba: Uint8ClampedArray;
   pngDataUrl: string;
 }> {
-  const img = await loadImage(dataUrl);
+  const img = await loadCachedImage(dataUrl);
   const targetWidth = Math.max(1, Math.round(width ?? img.naturalWidth));
   const targetHeight = Math.max(1, Math.round(height ?? img.naturalHeight));
 
@@ -171,6 +164,20 @@ async function rasterizeDataUrl(
   };
 }
 
+function rasterizeCanvas(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Canvas context unavailable during export.');
+  }
+
+  return {
+    width: canvas.width,
+    height: canvas.height,
+    rgba: ctx.getImageData(0, 0, canvas.width, canvas.height).data,
+    pngDataUrl: canvas.toDataURL('image/png'),
+  };
+}
+
 async function createPositionedLayerPng(
   layer: BranchLayer,
   documentWidth: number,
@@ -186,8 +193,13 @@ async function createPositionedLayerPng(
   }
 
   ctx.clearRect(0, 0, documentWidth, documentHeight);
-  const img = await loadImage(layer.sourceDataUrl);
-  ctx.drawImage(img, layer.left, layer.top, layer.width, layer.height);
+  const maskedLayer = await createMaskedLayerCanvas(
+    layer.sourceDataUrl,
+    layer.width,
+    layer.height,
+    layer.layerMask ?? null,
+  );
+  ctx.drawImage(maskedLayer, layer.left, layer.top, layer.width, layer.height);
   return canvas.toDataURL('image/png');
 }
 
@@ -289,7 +301,13 @@ async function writePsd(stack: BranchLayerStack): Promise<Uint8Array> {
   const layerChannelPayloads: Uint8Array[] = [];
 
   for (const layer of stack.layers) {
-    const raster = await rasterizeDataUrl(layer.sourceDataUrl, layer.width, layer.height);
+    const maskedLayerCanvas = await createMaskedLayerCanvas(
+      layer.sourceDataUrl,
+      layer.width,
+      layer.height,
+      layer.layerMask ?? null,
+    );
+    const raster = rasterizeCanvas(maskedLayerCanvas);
     const channels = splitChannels(raster.rgba, raster.width * raster.height);
     const wrappedChannels = [
       { id: 0, bytes: wrapRawChannelData(channels.red) },
@@ -417,11 +435,21 @@ async function buildStack(nodes: ImageNode[], activeNodeId: string | null, works
       createdAt: node.createdAt,
       sourceUri: node.sourceUri ?? null,
       modificationBox: node.modificationBox ?? null,
+      layerMask: node.layerMask ?? null,
       references,
       finalResultDataUrl: resolveFinalResult(node),
       geminiResultDataUrl: node.geminiResultBase64 ?? null,
     } satisfies BranchLayer;
   });
+
+  const maskedCompositeCanvas = await renderLayerComposite(
+    layers,
+    documentWidth,
+    documentHeight,
+    {
+      layerKey: layer => layer.nodeId,
+    },
+  );
 
   return {
     workspaceName,
@@ -429,7 +457,7 @@ async function buildStack(nodes: ImageNode[], activeNodeId: string | null, works
     rootNodeId: rootNode.id,
     documentWidth,
     documentHeight,
-    finalCompositeDataUrl: resolveFinalResult(activeNode),
+    finalCompositeDataUrl: maskedCompositeCanvas.toDataURL('image/png'),
     rootCompositeDataUrl: resolveFinalResult(rootNode),
     layers,
   };
@@ -473,6 +501,7 @@ export async function buildLayerExportBundle(
       stack.documentHeight,
     );
     const layerFile = `layers/${layerPrefix}.png`;
+    const maskFile = layer.layerMask ? `masks/${layerPrefix}.png` : null;
     const finalFile = `nodes/${layerPrefix}/final.png`;
     const geminiFile = layer.geminiResultDataUrl ? `nodes/${layerPrefix}/gemini.png` : null;
 
@@ -486,6 +515,14 @@ export async function buildLayerExportBundle(
       contents: layer.finalResultDataUrl,
       encoding: 'data-url',
     });
+
+    if (maskFile && layer.layerMask) {
+      files.push({
+        relativePath: maskFile,
+        contents: layer.layerMask.dataUrl,
+        encoding: 'data-url',
+      });
+    }
 
     if (geminiFile && layer.geminiResultDataUrl) {
       files.push({
@@ -518,8 +555,15 @@ export async function buildLayerExportBundle(
         sourceNodeId: reference.sourceNodeId,
         sourceUri: reference.sourceUri,
       })),
+      mask: layer.layerMask ? {
+        width: layer.layerMask.width,
+        height: layer.layerMask.height,
+        updatedAt: layer.layerMask.updatedAt,
+        file: maskFile,
+      } : null,
       files: {
         layer: layerFile,
+        mask: maskFile,
         final: finalFile,
         gemini: geminiFile,
       },
