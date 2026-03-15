@@ -3,6 +3,7 @@ import { ref, nextTick, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Type, Search, Loader2, Info, X, Upload, Image as ImageIcon } from 'lucide-vue-next';
 import CanvasSelection, { CropData } from '../components/CanvasSelection.vue';
 import { useAppStore } from '../stores/appStore';
+import type { ReferenceImageAsset } from '../stores/appStore';
 import { generateImage, ASPECT_RATIO_VALUES, getSupportedAspectRatios, getSupportedResolutions } from '../services/geminiService';
 import type { GenerationParams, AspectRatio, Resolution, GenerationModel, ThinkingLevel } from '../services/geminiService';
 
@@ -95,10 +96,88 @@ const activeCropData = ref<CropData | null>(null);
 const canvasRef = ref<any>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const refFileInput = ref<HTMLInputElement | null>(null);
+const THUMBNAIL_MAX_SIDE = 256;
 
 function handleSelectionPx(w: number, h: number) {
   selectionNaturalW.value = w;
   selectionNaturalH.value = h;
+}
+
+function createReferenceId() {
+  return `ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createReferenceAsset(
+  dataUrl: string,
+  kind: ReferenceImageAsset['kind'],
+  options: {
+    sourceUri?: string | null;
+    sourceNodeId?: string | null;
+  } = {},
+): ReferenceImageAsset {
+  return {
+    id: createReferenceId(),
+    dataUrl,
+    sourceUri: options.sourceUri ?? null,
+    sourceNodeId: options.sourceNodeId ?? null,
+    kind,
+  };
+}
+
+function cloneReferenceAsset(reference: ReferenceImageAsset): ReferenceImageAsset {
+  return { ...reference };
+}
+
+function getFileSourceUri(file: File | null | undefined): string | null {
+  const rawPath = (file as (File & { path?: string }) | null | undefined)?.path;
+  if (!rawPath) return null;
+
+  const normalizedPath = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
+  return encodeURI(`file:///${normalizedPath}`);
+}
+
+function buildModificationBox(crop: CropData | null) {
+  if (!crop) return null;
+
+  return {
+    x: crop.x,
+    y: crop.y,
+    w: crop.w,
+    h: crop.h,
+    originalWidth: crop.originalWidth,
+    originalHeight: crop.originalHeight,
+  };
+}
+
+async function createThumbnailDataUrl(sourceDataUrl: string, maxSide = THUMBNAIL_MAX_SIDE): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+
+    img.onload = () => {
+      const longestSide = Math.max(img.naturalWidth, img.naturalHeight);
+      if (!Number.isFinite(longestSide) || longestSide <= 0 || longestSide <= maxSide) {
+        resolve(sourceDataUrl);
+        return;
+      }
+
+      const scale = maxSide / longestSide;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(sourceDataUrl);
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/png'));
+    };
+
+    img.onerror = () => resolve(sourceDataUrl);
+    img.src = sourceDataUrl;
+  });
 }
 
 const displayedResolution = computed<Resolution>(() => {
@@ -126,10 +205,11 @@ function resetParentPreviewState() {
 }
 
 function handleCrop(data: CropData) {
-  store.referenceImages.unshift(data.base64);
-  if (store.referenceImages.length > 14) {
-    store.removeReferenceImage(14);
-  }
+  const sourceNode = activeImageNode.value;
+  store.prependReferenceImage(createReferenceAsset(data.base64, 'crop', {
+    sourceUri: sourceNode?.sourceUri ?? null,
+    sourceNodeId: sourceNode?.id ?? null,
+  }));
   activeCropData.value = data;
 }
 
@@ -171,9 +251,12 @@ async function onGenerate() {
 
   try {
     const activeNode = activeImageNode.value;
-    const implicitRef = store.referenceImages.length === 0 && activeNode?.blobBase64
-      ? [activeNode.blobBase64]
-      : null;
+    const generationReferences: ReferenceImageAsset[] = store.referenceImages.length === 0 && activeNode?.blobBase64
+      ? [createReferenceAsset(activeNode.blobBase64, 'implicit-node', {
+          sourceUri: activeNode.sourceUri ?? null,
+          sourceNodeId: activeNode.id,
+        })]
+      : store.referenceImages.map(reference => cloneReferenceAsset(reference));
 
     const safeAspectRatio = normalizeAspectRatioForModel(aspectRatio.value, model.value);
     let effectiveResolution = normalizeResolutionForModel(resolution.value, model.value);
@@ -205,7 +288,7 @@ async function onGenerate() {
       model: model.value,
       aspectRatio: safeAspectRatio,
       resolution: effectiveResolution,
-      referenceImages: implicitRef ?? store.referenceImages,
+      referenceImages: generationReferences.map(reference => reference.dataUrl),
       useSearchGrounding: useSearchGrounding.value,
       thinkingLevel: model.value === 'gemini-3.1-flash-image-preview' ? thinkingLevel.value : undefined,
     };
@@ -226,6 +309,8 @@ async function onGenerate() {
       }
     }
 
+    const finalResultThumbnailBase64 = await createThumbnailDataUrl(finalBase64);
+
     store.addNode({
       id: Date.now().toString(),
       parentId: generationParentId,
@@ -233,6 +318,11 @@ async function onGenerate() {
       prompt: prompt.value,
       model: model.value,
       createdAt: Date.now(),
+      sourceUri: null,
+      modificationBox: buildModificationBox(generationCropData),
+      referenceSnapshots: generationReferences,
+      geminiResultBase64: resultBase64,
+      finalResultThumbnailBase64,
     }, generationWorkspaceId || undefined);
   } catch (e: any) {
     console.error(e);
@@ -251,14 +341,23 @@ function onFileSelected(e: Event) {
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = (loadEvent) => {
+  const sourceUri = getFileSourceUri(file);
+  reader.onload = async (loadEvent) => {
+    const base64 = loadEvent.target?.result as string;
+    const thumbnail = await createThumbnailDataUrl(base64);
+
     store.addNode({
       id: Date.now().toString(),
       parentId: store.activeNodeId,
-      blobBase64: loadEvent.target?.result as string,
+      blobBase64: base64,
       prompt: 'Media Upload',
       model: 'Local',
       createdAt: Date.now(),
+      sourceUri,
+      modificationBox: null,
+      referenceSnapshots: [],
+      geminiResultBase64: null,
+      finalResultThumbnailBase64: thumbnail,
     });
   };
   reader.readAsDataURL(file);
@@ -273,10 +372,11 @@ function onRefFileSelected(e: Event) {
   if (!file) return;
 
   const reader = new FileReader();
+  const sourceUri = getFileSourceUri(file);
   reader.onload = (loadEvent) => {
     const base64 = loadEvent.target?.result as string;
     if (store.referenceImages.length < 14) {
-      store.addReferenceImage(base64);
+      store.addReferenceImage(createReferenceAsset(base64, 'upload', { sourceUri }));
     }
   };
   reader.readAsDataURL(file);
@@ -508,9 +608,9 @@ watch(() => store.activeNodeId, () => {
         <div v-if="store.referenceImages.length > 0" class="flex gap-2 overflow-x-auto pb-2 custom-scroll">
           <div
             v-for="(img, idx) in store.referenceImages"
-            :key="idx"
+            :key="img.id"
             class="relative shrink-0 w-16 h-16 rounded border border-border group">
-            <img :src="img" class="w-full h-full object-cover rounded opacity-80" />
+            <img :src="img.dataUrl" :title="img.sourceUri || img.kind" class="w-full h-full object-cover rounded opacity-80" />
             <button
               @click="store.removeReferenceImage(idx)"
               class="absolute -top-2 -right-2 bg-surface hover:bg-red-500/20 text-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
