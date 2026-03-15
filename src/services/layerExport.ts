@@ -1,5 +1,5 @@
 import type { ImageNode, ReferenceImageAsset } from '../stores/appStore';
-import { createMaskedLayerCanvas, loadCachedImage, renderLayerComposite } from './layerRendering';
+import { createMaskCanvas, createMaskedLayerCanvas, loadCachedImage, renderLayerComposite } from './layerRendering';
 
 export type BranchLayerKind = 'root' | 'patch' | 'full-frame';
 type ExportFileEncoding = 'utf8' | 'base64' | 'data-url';
@@ -164,17 +164,36 @@ async function rasterizeDataUrl(
   };
 }
 
-function rasterizeCanvas(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext('2d');
+async function rasterizeMask(
+  layer: Pick<BranchLayer, 'width' | 'height' | 'layerMask'>,
+): Promise<{
+  width: number;
+  height: number;
+  grayscale: Uint8Array;
+  pngDataUrl: string;
+}> {
+  const maskCanvas = await createMaskCanvas(layer.layerMask ?? null, layer.width, layer.height);
+  const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) {
-    throw new Error('Canvas context unavailable during export.');
+    throw new Error('Canvas context unavailable during mask export.');
+  }
+
+  const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+  const pixels = imageData.data;
+  const grayscale = new Uint8Array(maskCanvas.width * maskCanvas.height);
+
+  for (let i = 0; i < grayscale.length; i += 1) {
+    const offset = i * 4;
+    const luminance = Math.round((pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3);
+    const sourceAlpha = pixels[offset + 3] / 255;
+    grayscale[i] = Math.round(luminance * sourceAlpha);
   }
 
   return {
-    width: canvas.width,
-    height: canvas.height,
-    rgba: ctx.getImageData(0, 0, canvas.width, canvas.height).data,
-    pngDataUrl: canvas.toDataURL('image/png'),
+    width: maskCanvas.width,
+    height: maskCanvas.height,
+    grayscale,
+    pngDataUrl: maskCanvas.toDataURL('image/png'),
   };
 }
 
@@ -296,29 +315,59 @@ function wrapRawChannelData(channelBytes: Uint8Array): Uint8Array {
   return concatBytes(uint16be(0), channelBytes);
 }
 
+function buildLayerMaskExtraData(
+  layer: Pick<BranchLayer, 'left' | 'top' | 'width' | 'height'>,
+  hasMask: boolean,
+): Uint8Array {
+  if (!hasMask) {
+    return uint32be(0);
+  }
+
+  const maskData = concatBytes(
+    int32be(layer.top),
+    int32be(layer.left),
+    int32be(layer.top + layer.height),
+    int32be(layer.left + layer.width),
+    uint8(255),
+    uint8(0),
+    uint16be(0),
+  );
+
+  return concatBytes(
+    uint32be(maskData.length),
+    maskData,
+  );
+}
+
 async function writePsd(stack: BranchLayerStack): Promise<Uint8Array> {
   const layerRecords: Uint8Array[] = [];
   const layerChannelPayloads: Uint8Array[] = [];
 
   for (const layer of stack.layers) {
-    const maskedLayerCanvas = await createMaskedLayerCanvas(
+    const sourceRaster = await rasterizeDataUrl(
       layer.sourceDataUrl,
       layer.width,
       layer.height,
-      layer.layerMask ?? null,
     );
-    const raster = rasterizeCanvas(maskedLayerCanvas);
-    const channels = splitChannels(raster.rgba, raster.width * raster.height);
-    const wrappedChannels = [
+    const channels = splitChannels(sourceRaster.rgba, sourceRaster.width * sourceRaster.height);
+    const maskRaster = layer.layerMask ? await rasterizeMask(layer) : null;
+    const wrappedChannels: Array<{ id: number; bytes: Uint8Array }> = [
       { id: 0, bytes: wrapRawChannelData(channels.red) },
       { id: 1, bytes: wrapRawChannelData(channels.green) },
       { id: 2, bytes: wrapRawChannelData(channels.blue) },
       { id: -1, bytes: wrapRawChannelData(channels.alpha) },
     ];
 
+    if (maskRaster) {
+      wrappedChannels.push({
+        id: -2,
+        bytes: wrapRawChannelData(maskRaster.grayscale),
+      });
+    }
+
     const layerName = sanitizeSegment(layer.name, `Layer ${layer.index}`);
     const extraData = concatBytes(
-      uint32be(0),
+      buildLayerMaskExtraData(layer, !!maskRaster),
       uint32be(0),
       pascalString(layerName),
     );
@@ -504,6 +553,7 @@ export async function buildLayerExportBundle(
     const maskFile = layer.layerMask ? `masks/${layerPrefix}.png` : null;
     const finalFile = `nodes/${layerPrefix}/final.png`;
     const geminiFile = layer.geminiResultDataUrl ? `nodes/${layerPrefix}/gemini.png` : null;
+    const normalizedMask = layer.layerMask ? await rasterizeMask(layer) : null;
 
     files.push({
       relativePath: layerFile,
@@ -519,7 +569,7 @@ export async function buildLayerExportBundle(
     if (maskFile && layer.layerMask) {
       files.push({
         relativePath: maskFile,
-        contents: layer.layerMask.dataUrl,
+        contents: normalizedMask?.pngDataUrl || layer.layerMask.dataUrl,
         encoding: 'data-url',
       });
     }
@@ -556,8 +606,8 @@ export async function buildLayerExportBundle(
         sourceUri: reference.sourceUri,
       })),
       mask: layer.layerMask ? {
-        width: layer.layerMask.width,
-        height: layer.layerMask.height,
+        width: normalizedMask?.width ?? layer.layerMask.width,
+        height: normalizedMask?.height ?? layer.layerMask.height,
         updatedAt: layer.layerMask.updatedAt,
         file: maskFile,
       } : null,
