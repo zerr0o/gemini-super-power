@@ -76,6 +76,9 @@ const previewLineageLabel = computed(() => {
   if (previewIndex === activeLineageCurrentIndex.value) return `Current ${previewIndex + 1}/${activeLineageNodes.value.length}`;
   return `Node ${previewIndex + 1}/${activeLineageNodes.value.length}`;
 });
+const isShowingLineageTimeline = computed(() =>
+  isShowingParentPreview.value && activeLineageNodes.value.length > 1
+);
 
 function normalizeAspectRatioForModel(value: AspectRatio, currentModel: GenerationModel): AspectRatio {
   const supported = getSupportedAspectRatios(currentModel);
@@ -191,6 +194,16 @@ function formatDensity(value: number | null | undefined) {
 
 function formatOpacity(value: number) {
   return `${Math.round(value * 100)}%`;
+}
+
+function getNodePreviewImage(node: { finalResultThumbnailBase64?: string | null; finalResultBase64?: string | null; blobBase64: string }) {
+  return node.finalResultThumbnailBase64 || node.finalResultBase64 || node.blobBase64;
+}
+
+function getLineageNodeRole(index: number) {
+  if (index === 0) return 'Root';
+  if (index === activeLineageCurrentIndex.value) return 'Current';
+  return `Step ${index + 1}`;
 }
 
 function clampIndex(value: number, min: number, max: number) {
@@ -719,6 +732,58 @@ watch(() => store.activeNodeId, () => {
     <div class="flex-1 flex overflow-hidden p-8 items-center justify-center">
       <template v-if="activeImageNode">
         <div class="relative w-full h-full">
+          <div
+            v-if="isShowingLineageTimeline"
+            class="absolute left-4 top-1/2 -translate-y-1/2 z-30 w-[132px] max-h-[calc(100%-3rem)] rounded-2xl border border-border bg-surface/88 backdrop-blur-md shadow-xl p-3">
+            <div class="absolute left-[29px] top-10 bottom-5 w-px bg-gradient-to-b from-primary/40 via-border to-primary/20 pointer-events-none"></div>
+            <div class="timeline-scroll relative flex flex-col gap-3 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
+              <button
+                v-for="(node, index) in activeLineageNodes"
+                :key="node.id"
+                class="relative flex items-start gap-3 text-left transition-colors rounded-xl p-1"
+                :class="previewLineageNode?.id === node.id
+                  ? 'bg-primary/10'
+                  : node.id === activeImageNode.id
+                    ? 'bg-white/5'
+                    : 'hover:bg-white/5'"
+                @mouseenter="isHoldingParentPreviewKey ? showLineagePreview(index) : null">
+                <div class="relative shrink-0 pt-0.5">
+                  <div
+                    class="w-11 h-11 rounded-xl overflow-hidden border shadow-lg bg-black"
+                    :class="previewLineageNode?.id === node.id
+                      ? 'border-primary shadow-[0_0_18px_rgba(250,204,21,0.26)]'
+                      : node.id === activeImageNode.id
+                        ? 'border-green-400/60'
+                        : 'border-border'">
+                    <img :src="getNodePreviewImage(node)" class="w-full h-full object-cover" draggable="false" />
+                  </div>
+                  <span
+                    class="absolute -right-1 -top-1 w-3 h-3 rounded-full border border-[#111]"
+                    :class="previewLineageNode?.id === node.id
+                      ? 'bg-primary'
+                      : node.id === activeImageNode.id
+                        ? 'bg-green-400'
+                        : 'bg-surfaceHover'">
+                  </span>
+                </div>
+                <div class="min-w-0 flex-1 pt-0.5">
+                  <p
+                    class="text-[10px] uppercase tracking-[0.18em]"
+                    :class="previewLineageNode?.id === node.id
+                      ? 'text-primary'
+                      : node.id === activeImageNode.id
+                        ? 'text-green-300'
+                        : 'text-textMuted'">
+                    {{ getLineageNodeRole(index) }}
+                  </p>
+                  <p class="mt-1 text-[11px] leading-snug text-textMain line-clamp-2">
+                    {{ node.prompt || (index === 0 ? 'Base Image' : 'Untitled node') }}
+                  </p>
+                </div>
+              </button>
+            </div>
+          </div>
+
           <CanvasSelection
             :key="activeImageNode.id"
             ref="canvasRef"
@@ -1010,5 +1075,27 @@ watch(() => store.activeNodeId, () => {
 
 .custom-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+.timeline-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(250, 204, 21, 0.45) transparent;
+}
+
+.timeline-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.timeline-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(250, 204, 21, 0.72), rgba(245, 158, 11, 0.32));
+  border-radius: 999px;
+}
+
+.timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(253, 224, 71, 0.84), rgba(249, 115, 22, 0.46));
 }
 </style>
