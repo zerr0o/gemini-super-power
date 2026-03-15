@@ -18,7 +18,7 @@ Gemini Super Power is a desktop creative workspace for iterative Gemini image ge
 
 ### Generation View
 
-![Generation view](readme-images/GeminiSuperPower1.png)
+![Generation view](readme-images/GeminiSuperPower1.jpg)
 
 ### History Graph
 
@@ -26,7 +26,7 @@ Gemini Super Power is a desktop creative workspace for iterative Gemini image ge
 
 ### Node Inspector
 
-![Node inspector](readme-images/GeminiSuperPower3.jpg)
+![Node inspector](readme-images/GeminiSuperPower3.png)
 
 ### Layer Mask Studio
 
