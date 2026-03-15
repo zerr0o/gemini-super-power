@@ -1,109 +1,79 @@
-import { ipcMain, dialog, app, BrowserWindow } from "electron";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-import { writeFile, mkdir, access } from "node:fs/promises";
-import { constants } from "node:fs";
-const __dirname$1 = path.dirname(fileURLToPath(import.meta.url));
-process.env.APP_ROOT = path.join(__dirname$1, "..");
-const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
-const MAIN_DIST = path.join(process.env.APP_ROOT, "dist-electron");
-const RENDERER_DIST = path.join(process.env.APP_ROOT, "dist");
-process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, "public") : RENDERER_DIST;
-let win;
-function getDialogWindow() {
-  return BrowserWindow.getFocusedWindow() ?? win ?? void 0;
+import { ipcMain as p, dialog as a, app as c, BrowserWindow as d } from "electron";
+import { fileURLToPath as D } from "node:url";
+import t from "node:path";
+import { writeFile as m, mkdir as h, access as E } from "node:fs/promises";
+import { constants as j } from "node:fs";
+const P = t.dirname(D(import.meta.url));
+process.env.APP_ROOT = t.join(P, "..");
+const f = process.env.VITE_DEV_SERVER_URL, S = t.join(process.env.APP_ROOT, "dist-electron"), v = t.join(process.env.APP_ROOT, "dist");
+process.env.VITE_PUBLIC = f ? t.join(process.env.APP_ROOT, "public") : v;
+let s;
+function _() {
+  return d.getFocusedWindow() ?? s ?? void 0;
 }
-function sanitizeFileName(value, fallback = "export") {
-  const sanitized = value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "-").replace(/\s+/g, " ").trim().slice(0, 80);
-  return sanitized || fallback;
+function O(o, e = "export") {
+  return o.replace(/[<>:"/\\|?*\x00-\x1F]/g, "-").replace(/\s+/g, " ").trim().slice(0, 80) || e;
 }
-function decodeContents(contents, encoding) {
-  if (encoding === "utf8") {
-    return Buffer.from(contents, "utf8");
+function g(o, e) {
+  if (e === "utf8")
+    return Buffer.from(o, "utf8");
+  if (e === "data-url") {
+    const i = o.split(",", 2)[1] || "";
+    return Buffer.from(i, "base64");
   }
-  if (encoding === "data-url") {
-    const base64 = contents.split(",", 2)[1] || "";
-    return Buffer.from(base64, "base64");
-  }
-  return Buffer.from(contents, "base64");
+  return Buffer.from(o, "base64");
 }
-async function ensureUniqueDirectory(baseDir, folderName) {
-  const safeName = sanitizeFileName(folderName);
-  let candidate = path.join(baseDir, safeName);
-  let suffix = 2;
-  while (true) {
+async function T(o, e) {
+  const i = O(e);
+  let r = t.join(o, i), n = 2;
+  for (; ; )
     try {
-      await access(candidate, constants.F_OK);
-      candidate = path.join(baseDir, `${safeName}-${suffix}`);
-      suffix += 1;
+      await E(r, j.F_OK), r = t.join(o, `${i}-${n}`), n += 1;
     } catch {
-      await mkdir(candidate, { recursive: true });
-      return candidate;
+      return await h(r, { recursive: !0 }), r;
     }
-  }
 }
-function createWindow() {
-  win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
+function R() {
+  s = new d({
+    icon: t.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
     webPreferences: {
-      preload: path.join(__dirname$1, "preload.mjs")
+      preload: t.join(P, "preload.mjs")
     }
-  });
-  win.webContents.on("did-finish-load", () => {
-    win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
-  });
-  if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL);
-  } else {
-    win.loadFile(path.join(RENDERER_DIST, "index.html"));
-  }
+  }), s.webContents.on("did-finish-load", () => {
+    s == null || s.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+  }), f ? s.loadURL(f) : s.loadFile(t.join(v, "index.html"));
 }
-ipcMain.handle("desktop:save-file", async (_event, payload) => {
-  const browserWindow = getDialogWindow();
-  const options = {
-    title: payload.title,
-    defaultPath: payload.defaultPath,
-    filters: payload.filters
-  };
-  const result = browserWindow ? await dialog.showSaveDialog(browserWindow, options) : await dialog.showSaveDialog(options);
-  if (result.canceled || !result.filePath) {
-    return null;
-  }
-  await writeFile(result.filePath, decodeContents(payload.contents, payload.encoding));
-  return result.filePath;
+p.handle("desktop:save-file", async (o, e) => {
+  const i = _(), r = {
+    title: e.title,
+    defaultPath: e.defaultPath,
+    filters: e.filters
+  }, n = i ? await a.showSaveDialog(i, r) : await a.showSaveDialog(r);
+  return n.canceled || !n.filePath ? null : (await m(n.filePath, g(e.contents, e.encoding)), n.filePath);
 });
-ipcMain.handle("desktop:save-directory-files", async (_event, payload) => {
-  const browserWindow = getDialogWindow();
-  const options = {
-    title: payload.title,
+p.handle("desktop:save-directory-files", async (o, e) => {
+  const i = _(), r = {
+    title: e.title,
     properties: ["openDirectory", "createDirectory"]
-  };
-  const result = browserWindow ? await dialog.showOpenDialog(browserWindow, options) : await dialog.showOpenDialog(options);
-  if (result.canceled || result.filePaths.length === 0) {
+  }, n = i ? await a.showOpenDialog(i, r) : await a.showOpenDialog(r);
+  if (n.canceled || n.filePaths.length === 0)
     return null;
+  const u = await T(n.filePaths[0], e.folderName);
+  for (const l of e.files) {
+    const w = t.join(u, l.relativePath);
+    await h(t.dirname(w), { recursive: !0 }), await m(w, g(l.contents, l.encoding));
   }
-  const exportDir = await ensureUniqueDirectory(result.filePaths[0], payload.folderName);
-  for (const file of payload.files) {
-    const targetPath = path.join(exportDir, file.relativePath);
-    await mkdir(path.dirname(targetPath), { recursive: true });
-    await writeFile(targetPath, decodeContents(file.contents, file.encoding));
-  }
-  return exportDir;
+  return u;
 });
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-    win = null;
-  }
+c.on("window-all-closed", () => {
+  process.platform !== "darwin" && (c.quit(), s = null);
 });
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+c.on("activate", () => {
+  d.getAllWindows().length === 0 && R();
 });
-app.whenReady().then(createWindow);
+c.whenReady().then(R);
 export {
-  MAIN_DIST,
-  RENDERER_DIST,
-  VITE_DEV_SERVER_URL
+  S as MAIN_DIST,
+  v as RENDERER_DIST,
+  f as VITE_DEV_SERVER_URL
 };

@@ -92,6 +92,7 @@ const isHoldingParentPreviewKey = ref(false);
 const isShowingParentPreview = ref(false);
 const suppressParentPreviewUntilKeyup = ref(false);
 const activeCropData = ref<CropData | null>(null);
+const canvasView = ref({ zoom: 1, zoomPercent: 100, canPan: false });
 
 const canvasRef = ref<any>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -101,6 +102,22 @@ const THUMBNAIL_MAX_SIDE = 256;
 function handleSelectionPx(w: number, h: number) {
   selectionNaturalW.value = w;
   selectionNaturalH.value = h;
+}
+
+function handleCanvasView(state: { zoom: number; zoomPercent: number; canPan: boolean }) {
+  canvasView.value = state;
+}
+
+function zoomInCanvas() {
+  canvasRef.value?.zoomIn?.();
+}
+
+function zoomOutCanvas() {
+  canvasRef.value?.zoomOut?.();
+}
+
+function resetCanvasView() {
+  canvasRef.value?.resetView?.();
 }
 
 function createReferenceId() {
@@ -457,6 +474,7 @@ watch(() => props.isShortcutSuspended, (isShortcutSuspended) => {
 watch(() => store.activeNodeId, () => {
   resetTransientSelectionState();
   isShowingParentPreview.value = false;
+  canvasView.value = { zoom: 1, zoomPercent: 100, canPan: false };
 });
 </script>
 
@@ -471,7 +489,32 @@ watch(() => store.activeNodeId, () => {
         </span>
       </template>
       <template v-else>
-        <span class="text-textMuted text-xs">Zoom: 100%</span>
+        <button
+          class="w-6 h-6 rounded-full border border-border text-textMuted hover:text-primary hover:border-primary transition-colors text-xs flex items-center justify-center"
+          @click="zoomOutCanvas"
+          :disabled="!activeImageNode">
+          -
+        </button>
+        <span class="text-textMuted text-xs min-w-[72px] text-center">Zoom: {{ canvasView.zoomPercent }}%</span>
+        <button
+          class="w-6 h-6 rounded-full border border-border text-textMuted hover:text-primary hover:border-primary transition-colors text-xs flex items-center justify-center"
+          @click="zoomInCanvas"
+          :disabled="!activeImageNode">
+          +
+        </button>
+        <button
+          class="text-[11px] transition-colors"
+          :class="canvasView.zoomPercent === 100 ? 'text-textMuted opacity-40 cursor-default pointer-events-none' : 'text-textMuted hover:text-primary opacity-100'"
+          :disabled="canvasView.zoomPercent === 100"
+          @click="resetCanvasView">
+          Reset
+        </button>
+        <div class="w-px h-4 bg-border"></div>
+        <span
+          class="text-[11px] transition-colors"
+          :class="canvasView.canPan ? 'text-textMuted opacity-100' : 'text-textMuted opacity-40'">
+          Ctrl+drag to pan
+        </span>
         <div class="w-px h-4 bg-border"></div>
         <button
           class="hover:text-primary transition-colors flex items-center gap-1 text-xs"
@@ -491,18 +534,13 @@ watch(() => store.activeNodeId, () => {
             :key="activeImageNode.id"
             ref="canvasRef"
             :imageSrc="activeImageNode.blobBase64"
+            :preview-src="isShowingParentPreview && activeParentImageNode ? activeParentImageNode.blobBase64 : null"
             :targetRatio="isAutoRatio ? 'auto' : aspectRatio"
             :availableRatios="supportedAspectRatios"
             @cropped="handleCrop"
             @update:ratio="r => aspectRatio = r"
-            @update:selection-px="handleSelectionPx" />
-          <div
-            v-if="isShowingParentPreview && activeParentImageNode"
-            class="absolute inset-0 z-30 flex items-center justify-center bg-[#111] pointer-events-none">
-            <img
-              :src="activeParentImageNode.blobBase64"
-              class="max-w-full max-h-full object-contain shadow-2xl rounded" />
-          </div>
+            @update:selection-px="handleSelectionPx"
+            @update:view="handleCanvasView" />
         </div>
       </template>
       <template v-else-if="!isGenerating">
