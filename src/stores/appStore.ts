@@ -319,6 +319,19 @@ export const useAppStore = defineStore('app', () => {
     saveToIdb();
   }
 
+  function setPrimaryReferenceImage(reference: ReferenceImageInput) {
+    if (!activeWorkspace.value) return;
+
+    const normalizedReference = normalizeReferenceImage(reference);
+    if (activeWorkspace.value.referenceImages.length === 0) {
+      activeWorkspace.value.referenceImages.unshift(normalizedReference);
+    } else {
+      activeWorkspace.value.referenceImages[0] = normalizedReference;
+    }
+
+    saveToIdb();
+  }
+
   function removeReferenceImage(index: number) {
     if (!activeWorkspace.value) return;
     activeWorkspace.value.referenceImages.splice(index, 1);
@@ -350,6 +363,7 @@ export const useAppStore = defineStore('app', () => {
     deleteNodeAndChildren,
     addReferenceImage,
     prependReferenceImage,
+    setPrimaryReferenceImage,
     removeReferenceImage,
     clearReferenceImages 
   };

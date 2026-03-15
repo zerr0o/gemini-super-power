@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { Check, X as XIcon } from 'lucide-vue-next';
+import { Check, Plus, Star, X as XIcon } from 'lucide-vue-next';
 
 import { ASPECT_RATIO_VALUES } from '../services/geminiService';
 import type { AspectRatio } from '../services/geminiService';
@@ -10,8 +10,12 @@ const props = withDefaults(defineProps<{
   targetRatio: 'auto' | AspectRatio;
   availableRatios: readonly AspectRatio[];
   previewSrc?: string | null;
+  hasExplicitPrimaryReference?: boolean;
+  canAddSecondaryReference?: boolean;
 }>(), {
   previewSrc: null,
+  hasExplicitPrimaryReference: false,
+  canAddSecondaryReference: true,
 });
 
 export interface CropData {
@@ -24,6 +28,8 @@ export interface CropData {
   h: number;
 }
 
+export type CropConfirmAction = 'replace-primary' | 'add-secondary';
+
 export interface CanvasViewState {
   zoom: number;
   zoomPercent: number;
@@ -31,7 +37,7 @@ export interface CanvasViewState {
 }
 
 const emit = defineEmits<{
-  (e: 'cropped', data: CropData): void;
+  (e: 'cropped', data: CropData, action: CropConfirmAction): void;
   (e: 'update:ratio', ratio: AspectRatio): void;
   (e: 'update:selectionPx', w: number, h: number): void;
   (e: 'update:view', state: CanvasViewState): void;
@@ -476,7 +482,7 @@ function handleWheel(e: WheelEvent) {
   setZoom(Number(nextZoom.toFixed(2)), anchor);
 }
 
-function finalizeCrop() {
+function finalizeCrop(action: CropConfirmAction = 'replace-primary') {
   const box = renderBox.value;
   if (!imageRef.value || !box) return;
   if (boxMetrics.value.w < 20 || boxMetrics.value.h < 20) return;
@@ -498,15 +504,19 @@ function finalizeCrop() {
 
   ctx?.drawImage(imageRef.value, realX, realY, realW, realH, 0, 0, realW, realH);
 
-  emit('cropped', {
-    base64: canvas.toDataURL('image/png'),
-    originalWidth: natW,
-    originalHeight: natH,
-    x: realX,
-    y: realY,
-    w: realW,
-    h: realH,
-  });
+  emit(
+    'cropped',
+    {
+      base64: canvas.toDataURL('image/png'),
+      originalWidth: natW,
+      originalHeight: natH,
+      x: realX,
+      y: realY,
+      w: realW,
+      h: realH,
+    },
+    action,
+  );
 
   cancelCrop();
 }
@@ -612,7 +622,36 @@ defineExpose({
           @mousedown.stop="startDrag">
 
           <div v-if="mode === 'idle'" class="absolute -bottom-14 left-1/2 -translate-x-1/2 flex gap-2" style="isolation: isolate;">
-            <button @mousedown.stop.prevent="finalizeCrop" class="bg-primary hover:bg-primaryHover text-[#000] p-2 rounded-full shadow-[0_4px_15px_rgba(250,204,21,0.4)] transition-colors pointer-events-auto" title="Confirm Selection">
+            <template v-if="hasExplicitPrimaryReference">
+              <div class="relative">
+                <button
+                  @mousedown.stop.prevent="finalizeCrop('replace-primary')"
+                  class="bg-primary hover:bg-primaryHover text-[#000] p-2 rounded-full shadow-[0_4px_15px_rgba(250,204,21,0.4)] transition-colors pointer-events-auto"
+                  title="Replace Ref 1 with this selection">
+                  <Check :size="18" stroke-width="3" />
+                </button>
+                <span class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-yellow-300 text-[#000] flex items-center justify-center shadow pointer-events-none">
+                  <Star :size="10" class="fill-current" />
+                </span>
+              </div>
+              <button
+                @mousedown.stop.prevent="finalizeCrop('add-secondary')"
+                class="p-2 rounded-full shadow-[0_4px_15px_rgba(59,130,246,0.25)] transition-colors pointer-events-auto"
+                :class="canAddSecondaryReference
+                  ? 'bg-sky-400 hover:bg-sky-300 text-[#04111f]'
+                  : 'bg-surface text-textMuted border border-border opacity-50 cursor-not-allowed'"
+                :disabled="!canAddSecondaryReference"
+                :title="canAddSecondaryReference
+                  ? 'Keep Ref 1 and add this selection as an extra reference'
+                  : 'Reference limit reached. Remove one before adding another'">
+                <Plus :size="18" stroke-width="3" />
+              </button>
+            </template>
+            <button
+              v-else
+              @mousedown.stop.prevent="finalizeCrop('replace-primary')"
+              class="bg-primary hover:bg-primaryHover text-[#000] p-2 rounded-full shadow-[0_4px_15px_rgba(250,204,21,0.4)] transition-colors pointer-events-auto"
+              title="Set this selection as Ref 1">
               <Check :size="18" stroke-width="3" />
             </button>
             <button @mousedown.stop.prevent="cancelCrop" class="bg-surface hover:bg-red-500 hover:text-white text-textMuted border border-border p-2 rounded-full shadow-[0_4px_15px_rgba(0,0,0,0.5)] transition-colors pointer-events-auto" title="Cancel Selection">
