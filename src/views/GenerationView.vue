@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { Type, Search, Loader2, Info, X, Upload, Image as ImageIcon } from 'lucide-vue-next';
+import { Type, Search, Loader2, Info, X, Upload, Image as ImageIcon, Star } from 'lucide-vue-next';
 import CanvasSelection, { CropData } from '../components/CanvasSelection.vue';
 import { useAppStore } from '../stores/appStore';
 import type { ReferenceImageAsset } from '../stores/appStore';
@@ -38,6 +38,23 @@ const ALL_RESOLUTION_STEPS: { label: string; value: Resolution; px: number; flas
 const supportedAspectRatios = computed(() => getSupportedAspectRatios(model.value));
 const supportedResolutions = computed(() => getSupportedResolutions(model.value));
 const activeImageNode = computed(() => store.nodes.find(n => n.id === store.activeNodeId) || null);
+const primaryReference = computed(() => store.referenceImages[0] || null);
+const secondaryReferences = computed(() => store.referenceImages.slice(1));
+const implicitPrimaryReference = computed<ReferenceImageAsset | null>(() => {
+  const activeNode = activeImageNode.value;
+  if (!activeNode?.blobBase64) return null;
+
+  return createReferenceAsset(activeNode.blobBase64, 'implicit-node', {
+    sourceUri: activeNode.sourceUri ?? null,
+    sourceNodeId: activeNode.id,
+  });
+});
+const displayedPrimaryReference = computed(() => primaryReference.value || implicitPrimaryReference.value);
+const isPrimaryReferenceImplicit = computed(() => !primaryReference.value && !!implicitPrimaryReference.value);
+const hasSelectionZone = computed(() => selectionNaturalW.value > 0 && selectionNaturalH.value > 0);
+const isPrimaryReferenceFullImageFallback = computed(() =>
+  isPrimaryReferenceImplicit.value && !hasSelectionZone.value
+);
 const activeParentImageNode = computed(() => {
   const current = activeImageNode.value;
   if (!current?.parentId) return null;
@@ -341,6 +358,9 @@ async function onGenerate() {
       geminiResultBase64: resultBase64,
       finalResultThumbnailBase64,
     }, generationWorkspaceId || undefined);
+
+    prompt.value = '';
+    store.clearReferenceImages();
   } catch (e: any) {
     console.error(e);
     errorMsg.value = e.message || 'Generation failed';
@@ -643,23 +663,80 @@ watch(() => store.activeNodeId, () => {
           </button>
           <input type="file" ref="refFileInput" class="hidden" accept="image/*" @change="onRefFileSelected" />
         </div>
-        <div v-if="store.referenceImages.length > 0" class="flex gap-2 overflow-x-auto pb-2 custom-scroll">
+        <div class="flex flex-col gap-3">
           <div
-            v-for="(img, idx) in store.referenceImages"
-            :key="img.id"
-            class="relative shrink-0 w-16 h-16 rounded border border-border group">
-            <img :src="img.dataUrl" :title="img.sourceUri || img.kind" class="w-full h-full object-cover rounded opacity-80" />
-            <button
-              @click="store.removeReferenceImage(idx)"
-              class="absolute -top-2 -right-2 bg-surface hover:bg-red-500/20 text-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <X :size="12" />
-            </button>
+            class="relative rounded-xl border p-2 transition-colors"
+            :class="isPrimaryReferenceFullImageFallback
+              ? 'border-orange-400/70 bg-orange-400/10'
+              : displayedPrimaryReference
+                ? 'border-yellow-400/70 bg-yellow-400/10'
+                : 'border-yellow-400/40 bg-background/40'">
+            <div class="flex items-center justify-between mb-2">
+              <div
+                class="flex items-center gap-2"
+                :class="isPrimaryReferenceFullImageFallback ? 'text-orange-300' : 'text-yellow-300'">
+                <Star :size="12" class="fill-current" />
+                <span class="text-[11px] font-semibold uppercase tracking-[0.2em]">
+                  Ref 1 {{ isPrimaryReferenceImplicit ? 'Auto' : 'Primary' }}
+                </span>
+              </div>
+              <button
+                v-if="primaryReference"
+                @click="store.removeReferenceImage(0)"
+                class="bg-surface hover:bg-red-500/20 text-red-500 rounded-full p-1 transition-colors">
+                <X :size="12" />
+              </button>
+            </div>
+
+            <div
+              class="rounded-lg border border-dashed overflow-hidden"
+              :class="isPrimaryReferenceFullImageFallback
+                ? 'border-orange-300/50 bg-black'
+                : displayedPrimaryReference
+                  ? 'border-yellow-300/40 bg-black'
+                  : 'border-yellow-300/30 bg-background/60'">
+              <div v-if="displayedPrimaryReference" class="h-24 flex items-center justify-center">
+                <img
+                  :src="displayedPrimaryReference.dataUrl"
+                  :title="displayedPrimaryReference.sourceUri || displayedPrimaryReference.kind"
+                  class="w-full h-full object-contain opacity-90" />
+              </div>
+              <div
+                v-else
+                class="h-24 flex items-center justify-center text-center px-4 text-xs text-textMuted/70">
+                Draw the modification zone on the canvas to set Reference 1.
+              </div>
+            </div>
+            <p
+              class="mt-2 text-[11px]"
+              :class="isPrimaryReferenceFullImageFallback ? 'text-orange-100/90' : 'text-yellow-100/80'">
+              <template v-if="isPrimaryReferenceImplicit">
+                Using the full active image automatically because no explicit Ref 1 was provided yet.
+              </template>
+              <template v-else>
+                This slot is the main region to modify and is used first during generation.
+              </template>
+            </p>
           </div>
-        </div>
-        <div
-          v-else
-          class="text-xs text-textMuted/50 italic border border-dashed border-border rounded p-4 text-center">
-          Draw selection rect on canvas to add reference image.
+
+          <div v-if="secondaryReferences.length > 0" class="flex gap-2 overflow-x-auto pb-2 custom-scroll">
+            <div
+              v-for="(img, idx) in secondaryReferences"
+              :key="img.id"
+              class="relative shrink-0 w-16 h-16 rounded border border-border group">
+              <img :src="img.dataUrl" :title="img.sourceUri || img.kind" class="w-full h-full object-cover rounded opacity-80" />
+              <button
+                @click="store.removeReferenceImage(idx + 1)"
+                class="absolute -top-2 -right-2 bg-surface hover:bg-red-500/20 text-red-500 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <X :size="12" />
+              </button>
+            </div>
+          </div>
+          <div
+            v-else
+            class="text-xs text-textMuted/50 italic border border-dashed border-border rounded p-4 text-center">
+            Additional references are optional.
+          </div>
         </div>
       </div>
 
