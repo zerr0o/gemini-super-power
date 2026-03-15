@@ -10,10 +10,14 @@ const props = withDefaults(defineProps<{
   targetRatio: 'auto' | AspectRatio;
   availableRatios: readonly AspectRatio[];
   previewSrc?: string | null;
+  overlaySrc?: string | null;
+  overlayOpacity?: number;
   hasExplicitPrimaryReference?: boolean;
   canAddSecondaryReference?: boolean;
 }>(), {
   previewSrc: null,
+  overlaySrc: null,
+  overlayOpacity: 0.5,
   hasExplicitPrimaryReference: false,
   canAddSecondaryReference: true,
 });
@@ -614,6 +618,12 @@ defineExpose({
 
       <div class="absolute z-0" :style="stageStyle">
         <img :src="imageSrc" class="w-full h-full object-fill pointer-events-none shadow-2xl rounded" draggable="false" />
+        <img
+          v-if="overlaySrc"
+          :src="overlaySrc"
+          class="absolute inset-0 w-full h-full object-fill pointer-events-none rounded"
+          :style="{ opacity: overlayOpacity }"
+          draggable="false" />
 
         <div
           v-if="boxMetrics.w > 0"

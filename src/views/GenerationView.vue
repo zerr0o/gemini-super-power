@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, nextTick, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { Type, Search, Loader2, Info, X, Upload, Image as ImageIcon, Star } from 'lucide-vue-next';
+import { ChevronDown, ChevronUp, Type, Search, Loader2, Info, X, Upload, Image as ImageIcon, Star } from 'lucide-vue-next';
 import CanvasSelection, { type CropConfirmAction, type CropData } from '../components/CanvasSelection.vue';
 import { useAppStore } from '../stores/appStore';
-import type { ReferenceImageAsset } from '../stores/appStore';
+import type { ImageDimensions, ReferenceImageAsset } from '../stores/appStore';
 import { generateImage, ASPECT_RATIO_VALUES, getSupportedAspectRatios, getSupportedResolutions } from '../services/geminiService';
 import type { GenerationParams, AspectRatio, Resolution, GenerationModel, ThinkingLevel } from '../services/geminiService';
+import { getImageDimensionsFromDataUrl, resolveNodeFinalImageSize } from '../services/imageDimensions';
+import { buildPixelDensitySummary } from '../services/pixelDensity';
 
 const props = withDefaults(defineProps<{
   isActive?: boolean;
@@ -117,6 +119,37 @@ const canvasRef = ref<any>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const refFileInput = ref<HTMLInputElement | null>(null);
 const THUMBNAIL_MAX_SIDE = 256;
+const activeImageFinalSize = ref<ImageDimensions | null>(null);
+const isDensityOverlayEnabled = ref(false);
+const densityOverlaySrc = ref<string | null>(null);
+const densitySummary = ref<Awaited<ReturnType<typeof buildPixelDensitySummary>> | null>(null);
+const densityOverlayOpacity = ref(0.7);
+const isDensityPanelCollapsed = ref(false);
+
+const workAreaSize = computed(() => {
+  if (activeCropData.value) {
+    return {
+      width: activeCropData.value.w,
+      height: activeCropData.value.h,
+    };
+  }
+
+  if (selectionNaturalW.value > 0 && selectionNaturalH.value > 0) {
+    return {
+      width: selectionNaturalW.value,
+      height: selectionNaturalH.value,
+    };
+  }
+
+  if (activeImageFinalSize.value) {
+    return {
+      width: activeImageFinalSize.value.width,
+      height: activeImageFinalSize.value.height,
+    };
+  }
+
+  return null;
+});
 
 function handleSelectionPx(w: number, h: number) {
   selectionNaturalW.value = w;
@@ -137,6 +170,23 @@ function zoomOutCanvas() {
 
 function resetCanvasView() {
   canvasRef.value?.resetView?.();
+}
+
+function formatDensity(value: number | null | undefined) {
+  if (!value || !Number.isFinite(value)) return '--';
+  return `${value.toFixed(value >= 10 ? 1 : 2)}x`;
+}
+
+function formatOpacity(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function removePrimaryReference() {
+  if (!primaryReference.value) return;
+  store.removeReferenceImage(0);
+  activeCropData.value = null;
+  selectionNaturalW.value = 0;
+  selectionNaturalH.value = 0;
 }
 
 function createReferenceId() {
@@ -218,7 +268,8 @@ async function createThumbnailDataUrl(sourceDataUrl: string, maxSide = THUMBNAIL
 
 const displayedResolution = computed<Resolution>(() => {
   if (!isAutoResolution.value) return normalizeResolutionForModel(resolution.value, model.value);
-  const longestSide = Math.max(selectionNaturalW.value, selectionNaturalH.value);
+  const area = workAreaSize.value;
+  const longestSide = area ? Math.max(area.width, area.height) : 0;
   if (longestSide < 1) return normalizeResolutionForModel(resolution.value, model.value);
   return autoResolutionFromPx(longestSide, model.value);
 });
@@ -227,6 +278,53 @@ watch(model, (nextModel) => {
   aspectRatio.value = normalizeAspectRatioForModel(aspectRatio.value, nextModel);
   resolution.value = normalizeResolutionForModel(resolution.value, nextModel);
 });
+
+watch(
+  () => activeImageNode.value?.id || null,
+  async (_nodeId, _previousNodeId, onCleanup) => {
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+
+    if (!activeImageNode.value) {
+      activeImageFinalSize.value = null;
+      return;
+    }
+
+    const size = await resolveNodeFinalImageSize(activeImageNode.value);
+    if (!cancelled) {
+      activeImageFinalSize.value = size;
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [
+    store.activeNodeId,
+    store.nodes.length,
+  ],
+  async (_state, _previousState, onCleanup) => {
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+
+    if (!store.activeNodeId) {
+      densityOverlaySrc.value = null;
+      densitySummary.value = null;
+      return;
+    }
+
+    const summary = await buildPixelDensitySummary(store.nodes, store.activeNodeId);
+    if (!cancelled) {
+      densitySummary.value = summary;
+      densityOverlaySrc.value = summary?.overlayDataUrl || null;
+    }
+  },
+  { immediate: true },
+);
 
 function resetTransientSelectionState() {
   activeCropData.value = null;
@@ -348,11 +446,17 @@ async function onGenerate() {
     const generationBaseNodeBlob = activeImageNode.value?.blobBase64;
 
     const resultBase64 = await generateImage(params);
+    const generatedImageSize = await getImageDimensionsFromDataUrl(resultBase64);
 
     let finalBase64 = resultBase64;
+    let finalImageSize = generatedImageSize;
 
     if (generationCropData && generationBaseNodeBlob) {
       finalBase64 = await compositeImage(generationBaseNodeBlob, resultBase64, generationCropData);
+      finalImageSize = {
+        width: generationCropData.originalWidth,
+        height: generationCropData.originalHeight,
+      };
       if (store.activeWorkspaceId === generationWorkspaceId) {
         activeCropData.value = null;
       }
@@ -371,6 +475,8 @@ async function onGenerate() {
       modificationBox: buildModificationBox(generationCropData),
       referenceSnapshots: generationReferences,
       geminiResultBase64: resultBase64,
+      generatedImageSize,
+      finalImageSize,
       finalResultThumbnailBase64,
     }, generationWorkspaceId || undefined);
 
@@ -396,6 +502,7 @@ function onFileSelected(e: Event) {
   const sourceUri = getFileSourceUri(file);
   reader.onload = async (loadEvent) => {
     const base64 = loadEvent.target?.result as string;
+    const imageSize = await getImageDimensionsFromDataUrl(base64);
     const thumbnail = await createThumbnailDataUrl(base64);
 
     store.addNode({
@@ -409,6 +516,8 @@ function onFileSelected(e: Event) {
       modificationBox: null,
       referenceSnapshots: [],
       geminiResultBase64: null,
+      generatedImageSize: imageSize,
+      finalImageSize: imageSize,
       finalResultThumbnailBase64: thumbnail,
     });
   };
@@ -550,7 +659,6 @@ watch(() => store.activeNodeId, () => {
           :class="canvasView.canPan ? 'text-textMuted opacity-100' : 'text-textMuted opacity-40'">
           Ctrl+drag to pan
         </span>
-        <div class="w-px h-4 bg-border"></div>
         <button
           class="hover:text-primary transition-colors flex items-center gap-1 text-xs"
           :class="{ 'text-primary': useSearchGrounding }"
@@ -570,6 +678,8 @@ watch(() => store.activeNodeId, () => {
             ref="canvasRef"
             :imageSrc="activeImageNode.blobBase64"
             :preview-src="isShowingParentPreview && activeParentImageNode ? activeParentImageNode.blobBase64 : null"
+            :overlay-src="!isShowingParentPreview && isDensityOverlayEnabled ? densityOverlaySrc : null"
+            :overlay-opacity="densityOverlayOpacity"
             :targetRatio="isAutoRatio ? 'auto' : aspectRatio"
             :availableRatios="supportedAspectRatios"
             :has-explicit-primary-reference="hasExplicitPrimaryReference"
@@ -578,6 +688,65 @@ watch(() => store.activeNodeId, () => {
             @update:ratio="r => aspectRatio = r"
             @update:selection-px="handleSelectionPx"
             @update:view="handleCanvasView" />
+
+          <div
+            class="absolute bottom-4 right-4 z-30 rounded-2xl border border-border bg-surface/88 backdrop-blur-md shadow-xl p-3 flex flex-col gap-3 transition-all"
+            :class="isDensityPanelCollapsed ? 'w-auto min-w-[180px]' : 'w-[250px]'">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <p class="text-[11px] uppercase tracking-[0.2em] text-textMuted">Pixel Density</p>
+                <p v-if="!isDensityPanelCollapsed" class="text-[11px] text-textMuted/80 mt-1">Generated size divided by covered layer area.</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  class="shrink-0 px-2.5 py-1 rounded-full border text-[11px] transition-colors"
+                  :class="isDensityOverlayEnabled
+                    ? 'border-primary bg-primary text-[#000] font-semibold'
+                    : 'border-border text-textMuted hover:border-primary hover:text-primary'"
+                  @click="isDensityOverlayEnabled = !isDensityOverlayEnabled">
+                  {{ isDensityOverlayEnabled ? 'On' : 'Off' }}
+                </button>
+                <button
+                  class="w-7 h-7 rounded-full border border-border text-textMuted hover:text-primary hover:border-primary transition-colors flex items-center justify-center"
+                  :title="isDensityPanelCollapsed ? 'Open density panel' : 'Hide density panel'"
+                  @click="isDensityPanelCollapsed = !isDensityPanelCollapsed">
+                  <ChevronUp v-if="isDensityPanelCollapsed" :size="14" />
+                  <ChevronDown v-else :size="14" />
+                </button>
+              </div>
+            </div>
+
+            <div v-if="!isDensityPanelCollapsed" class="rounded-xl border border-white/8 bg-background/50 p-2.5 flex flex-col gap-3">
+              <div class="flex flex-col gap-1.5">
+                <div class="flex items-center justify-between text-[11px] text-textMuted">
+                  <span>Overlay Opacity</span>
+                  <span>{{ formatOpacity(densityOverlayOpacity) }}</span>
+                </div>
+                <input
+                  v-model.number="densityOverlayOpacity"
+                  type="range"
+                  min="0.2"
+                  max="0.95"
+                  step="0.05"
+                  class="w-full accent-yellow-400 disabled:opacity-40"
+                  :disabled="!isDensityOverlayEnabled" />
+              </div>
+
+              <div class="flex items-center justify-between text-[11px] text-textMuted">
+                <span>Visible Range</span>
+                <span>{{ densitySummary ? `${formatDensity(densitySummary.minDensity)} to ${formatDensity(densitySummary.maxDensity)}` : 'Calculating...' }}</span>
+              </div>
+              <div
+                class="h-2 rounded-full border border-white/10"
+                style="background: linear-gradient(90deg, rgb(239,68,68) 0%, rgb(249,115,22) 38%, rgb(250,204,21) 52%, rgb(74,222,128) 100%);">
+              </div>
+              <div class="flex items-center justify-between text-[11px]">
+                <span class="text-red-300/90">&lt; 1x</span>
+                <span class="text-yellow-200/90">1x</span>
+                <span class="text-green-300/90">&gt; 1x</span>
+              </div>
+            </div>
+          </div>
         </div>
       </template>
       <template v-else-if="!isGenerating">
@@ -699,7 +868,7 @@ watch(() => store.activeNodeId, () => {
               </div>
               <button
                 v-if="primaryReference"
-                @click="store.removeReferenceImage(0)"
+                @click="removePrimaryReference"
                 class="bg-surface hover:bg-red-500/20 text-red-500 rounded-full p-1 transition-colors">
                 <X :size="12" />
               </button>

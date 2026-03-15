@@ -2,6 +2,7 @@
 import { computed, ref, watchEffect } from 'vue';
 import { Download, Image as ImageIcon, Layers, Link2, Sparkles } from 'lucide-vue-next';
 import { useAppStore } from '../stores/appStore';
+import type { ImageDimensions } from '../stores/appStore';
 import {
   buildBranchLayerStack,
   buildBranchPsdExport,
@@ -10,6 +11,7 @@ import {
   saveBranchPsdExport,
   saveLayerExportBundle,
 } from '../services/layerExport';
+import { formatImageSize, resolveNodeFinalImageSize, resolveNodeGeneratedImageSize } from '../services/imageDimensions';
 
 const store = useAppStore();
 
@@ -25,6 +27,8 @@ const referenceSnapshots = computed(() => activeImageNode.value?.referenceSnapsh
 const exportMode = ref<'bundle' | 'psd' | null>(null);
 const exportStatus = ref('');
 const exportError = ref('');
+const generatedImageSize = ref<ImageDimensions | null>(null);
+const finalImageSize = ref<ImageDimensions | null>(null);
 
 const workspaceName = computed(() => store.activeWorkspace?.name || 'workspace');
 const stackSummary = ref<Awaited<ReturnType<typeof buildBranchLayerStack>> | null>(null);
@@ -40,6 +44,18 @@ watchEffect(async () => {
   } catch {
     stackSummary.value = null;
   }
+});
+
+watchEffect(async () => {
+  const node = activeImageNode.value;
+  if (!node) {
+    generatedImageSize.value = null;
+    finalImageSize.value = null;
+    return;
+  }
+
+  generatedImageSize.value = await resolveNodeGeneratedImageSize(node);
+  finalImageSize.value = await resolveNodeFinalImageSize(node);
 });
 
 function formatDate(value: number) {
@@ -176,6 +192,7 @@ async function exportPsd() {
               <div class="p-3">
                 <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Final Output</p>
                 <p class="text-sm mt-1">Current full image</p>
+                <p class="text-xs text-textMuted mt-1">{{ formatImageSize(finalImageSize) }}</p>
               </div>
             </div>
 
@@ -190,6 +207,7 @@ async function exportPsd() {
               <div class="p-3">
                 <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Gemini Result</p>
                 <p class="text-sm mt-1">Raw model output before compositing</p>
+                <p class="text-xs text-textMuted mt-1">{{ formatImageSize(generatedImageSize) }}</p>
               </div>
             </div>
 
@@ -263,6 +281,14 @@ async function exportPsd() {
             <div>
               <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Root Node</p>
               <p class="mt-1 font-mono break-all">{{ rootNode?.id || 'None' }}</p>
+            </div>
+            <div>
+              <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Generated Layer Size</p>
+              <p class="mt-1">{{ formatImageSize(generatedImageSize) }}</p>
+            </div>
+            <div>
+              <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Final Image Size</p>
+              <p class="mt-1">{{ formatImageSize(finalImageSize) }}</p>
             </div>
           </div>
 
