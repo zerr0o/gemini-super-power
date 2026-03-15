@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue';
-import { Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
+import { computed, nextTick, ref } from 'vue';
+import { Check, Download, Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import GenerationView from './views/GenerationView.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import NodeInspector from './components/NodeInspector.vue';
@@ -15,6 +15,75 @@ const showRenameModal = ref(false);
 const renameInput = ref('');
 const renameInputEl = ref<HTMLInputElement | null>(null);
 const showDeleteModal = ref(false);
+const quickExportState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
+let quickExportResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+const activeImageNode = computed(() => store.nodes.find(node => node.id === store.activeNodeId) || null);
+
+function sanitizeFileNameSegment(value: string | null | undefined, fallback: string) {
+   const sanitized = (value || '')
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 48);
+
+   return sanitized || fallback;
+}
+
+function buildQuickExportFileName() {
+   const workspaceName = sanitizeFileNameSegment(store.activeWorkspace?.name, 'workspace');
+   const promptName = sanitizeFileNameSegment(activeImageNode.value?.prompt, 'image');
+   return `${workspaceName}-${promptName}.png`;
+}
+
+function triggerBrowserDownload(fileName: string, dataUrl: string) {
+   const link = document.createElement('a');
+   link.href = dataUrl;
+   link.download = fileName;
+   document.body.appendChild(link);
+   link.click();
+   document.body.removeChild(link);
+}
+
+async function exportActiveNodePng() {
+   const node = activeImageNode.value;
+   const dataUrl = node?.finalResultBase64 || node?.blobBase64 || '';
+   if (!node || !dataUrl) return;
+
+   quickExportState.value = 'saving';
+   const fileName = buildQuickExportFileName();
+
+   try {
+      const savedPath = await window.ipcRenderer?.invoke('desktop:save-file', {
+         title: 'Export Current PNG',
+         defaultPath: fileName,
+         filters: [{ name: 'PNG Image', extensions: ['png'] }],
+         contents: dataUrl,
+         encoding: 'data-url',
+      });
+
+      if (!savedPath && !window.ipcRenderer) {
+         triggerBrowserDownload(fileName, dataUrl);
+      }
+
+      if (savedPath === null) {
+         quickExportState.value = 'idle';
+         return;
+      }
+
+      quickExportState.value = 'saved';
+   } catch {
+      quickExportState.value = 'error';
+   }
+
+   if (quickExportResetTimer) {
+      clearTimeout(quickExportResetTimer);
+   }
+
+   quickExportResetTimer = setTimeout(() => {
+      quickExportState.value = 'idle';
+   }, 1800);
+}
 
 function handleRenameWorkspace() {
    if (!store.activeWorkspaceId) return;
@@ -85,9 +154,20 @@ function confirmDelete() {
          </div>
 
          <div class="flex items-center gap-2 app-region-no-drag">
-            <span
-               class="text-[10px] bg-primary/20 text-primary px-2 py-0.5 rounded cursor-pointer transition-colors hover:bg-primary/40">node
-               info</span>
+            <button
+               class="h-7 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.16em] transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-default"
+               :class="quickExportState === 'saved'
+                  ? 'border-green-400/40 bg-green-400/15 text-green-300'
+                  : quickExportState === 'error'
+                     ? 'border-red-400/40 bg-red-400/15 text-red-300'
+                     : 'border-border bg-primary/10 text-primary hover:bg-primary/20'"
+               :disabled="!activeImageNode || quickExportState === 'saving'"
+               @click="exportActiveNodePng"
+               title="Export the active image as a PNG">
+               <Check v-if="quickExportState === 'saved'" :size="12" />
+               <Download v-else :size="12" />
+               {{ quickExportState === 'saving' ? 'Exporting' : quickExportState === 'saved' ? 'Saved' : quickExportState === 'error' ? 'Retry' : 'Export PNG' }}
+            </button>
          </div>
       </header>
 
