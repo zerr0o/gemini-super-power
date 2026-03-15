@@ -5,9 +5,18 @@
   "asar": true,
   "productName": "Gemini Super Power",
   "icon": "public/icon.png",
+  "generateUpdatesFilesForAllChannels": true,
   "directories": {
     "output": "release/${version}"
   },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "zerr0o",
+      "repo": "gemini-super-power",
+      "releaseType": "release"
+    }
+  ],
   "files": [
     "dist",
     "dist-electron"

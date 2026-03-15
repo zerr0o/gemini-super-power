@@ -2,16 +2,29 @@
   "name": "gemini-super-power",
   "productName": "Gemini Super Power",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Desktop workspace for Gemini image generation, history navigation, layer masks, and layered exports.",
+  "author": "zerr0o",
+  "homepage": "https://github.com/zerr0o/gemini-super-power",
+  "bugs": {
+    "url": "https://github.com/zerr0o/gemini-super-power/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zerr0o/gemini-super-power.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && vite build && electron-builder",
+    "build": "vue-tsc && vite build && electron-builder --publish never",
+    "build:dir": "vue-tsc && vite build && electron-builder --dir --publish never",
+    "publish": "vue-tsc && vite build && electron-builder --publish always",
     "preview": "vite preview"
   },
   "dependencies": {
     "@google/genai": "^1.45.0",
     "clsx": "^2.1.1",
+    "electron-updater": "^6.8.3",
     "idb-keyval": "^6.2.2",
     "lucide-vue-next": "^0.577.0",
     "pinia": "^3.0.4",
