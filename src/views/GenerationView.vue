@@ -7,6 +7,7 @@ import type { ImageDimensions, ReferenceImageAsset } from '../stores/appStore';
 import { generateImage, ASPECT_RATIO_VALUES, getSupportedAspectRatios, getSupportedResolutions } from '../services/geminiService';
 import type { GenerationParams, AspectRatio, Resolution, GenerationModel, ThinkingLevel } from '../services/geminiService';
 import { getImageDimensionsFromDataUrl, resolveNodeFinalImageSize } from '../services/imageDimensions';
+import { buildNodeLineage } from '../services/layerExport';
 import { buildPixelDensitySummary } from '../services/pixelDensity';
 
 const props = withDefaults(defineProps<{
@@ -40,6 +41,8 @@ const ALL_RESOLUTION_STEPS: { label: string; value: Resolution; px: number; flas
 const supportedAspectRatios = computed(() => getSupportedAspectRatios(model.value));
 const supportedResolutions = computed(() => getSupportedResolutions(model.value));
 const activeImageNode = computed(() => store.nodes.find(n => n.id === store.activeNodeId) || null);
+const activeLineageNodes = computed(() => buildNodeLineage(store.nodes, store.activeNodeId));
+const activeLineageCurrentIndex = computed(() => Math.max(0, activeLineageNodes.value.length - 1));
 const primaryReference = computed(() => store.referenceImages[0] || null);
 const secondaryReferences = computed(() => store.referenceImages.slice(1));
 const hasExplicitPrimaryReference = computed(() => !!primaryReference.value);
@@ -59,10 +62,19 @@ const hasSelectionZone = computed(() => selectionNaturalW.value > 0 && selection
 const isPrimaryReferenceFullImageFallback = computed(() =>
   isPrimaryReferenceImplicit.value && !hasSelectionZone.value
 );
-const activeParentImageNode = computed(() => {
-  const current = activeImageNode.value;
-  if (!current?.parentId) return null;
-  return store.nodes.find(n => n.id === current.parentId) || null;
+const previewLineageIndex = ref<number | null>(null);
+const previewLineageNode = computed(() => {
+  if (previewLineageIndex.value === null) return null;
+  return activeLineageNodes.value[previewLineageIndex.value] || null;
+});
+const previewLineageLabel = computed(() => {
+  const previewNode = previewLineageNode.value;
+  const previewIndex = previewLineageIndex.value;
+  if (!previewNode || previewIndex === null) return '';
+
+  if (previewIndex === 0) return `Root ${previewIndex + 1}/${activeLineageNodes.value.length}`;
+  if (previewIndex === activeLineageCurrentIndex.value) return `Current ${previewIndex + 1}/${activeLineageNodes.value.length}`;
+  return `Node ${previewIndex + 1}/${activeLineageNodes.value.length}`;
 });
 
 function normalizeAspectRatioForModel(value: AspectRatio, currentModel: GenerationModel): AspectRatio {
@@ -181,12 +193,27 @@ function formatOpacity(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function clampIndex(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
 function removePrimaryReference() {
   if (!primaryReference.value) return;
   store.removeReferenceImage(0);
   activeCropData.value = null;
   selectionNaturalW.value = 0;
   selectionNaturalH.value = 0;
+}
+
+function showLineagePreview(index: number) {
+  const maxIndex = activeLineageCurrentIndex.value;
+  previewLineageIndex.value = clampIndex(index, 0, maxIndex);
+  isShowingParentPreview.value = true;
+}
+
+function hideLineagePreview() {
+  previewLineageIndex.value = null;
+  isShowingParentPreview.value = false;
 }
 
 function createReferenceId() {
@@ -334,7 +361,7 @@ function resetTransientSelectionState() {
 
 function resetParentPreviewState() {
   isHoldingParentPreviewKey.value = false;
-  isShowingParentPreview.value = false;
+  hideLineagePreview();
   suppressParentPreviewUntilKeyup.value = false;
 }
 
@@ -554,32 +581,50 @@ function canUseParentShortcut(target: EventTarget | null) {
     && !props.isShortcutSuspended
     && !isGenerating.value
     && !isTypingTarget(target)
-    && !!activeParentImageNode.value;
+    && activeLineageNodes.value.length > 1;
 }
 
 function handleGlobalKeyDown(e: KeyboardEvent) {
   const key = e.key.toLowerCase();
   const isSpace = e.code === 'Space' || e.key === ' ';
+  const isArrowUp = e.key === 'ArrowUp';
+  const isArrowDown = e.key === 'ArrowDown';
 
   if (key === 'a') {
     if (!canUseParentShortcut(e.target)) return;
     e.preventDefault();
     isHoldingParentPreviewKey.value = true;
     if (!e.repeat && !suppressParentPreviewUntilKeyup.value) {
-      isShowingParentPreview.value = true;
+      showLineagePreview(activeLineageCurrentIndex.value - 1);
     }
+    return;
+  }
+
+  if (isArrowUp || isArrowDown) {
+    if (!canUseParentShortcut(e.target)) return;
+    if (!isHoldingParentPreviewKey.value || suppressParentPreviewUntilKeyup.value) return;
+
+    const currentPreviewIndex = previewLineageIndex.value ?? Math.max(0, activeLineageCurrentIndex.value - 1);
+    const nextIndex = isArrowUp
+      ? currentPreviewIndex - 1
+      : currentPreviewIndex + 1;
+
+    e.preventDefault();
+    showLineagePreview(nextIndex);
     return;
   }
 
   if (!isSpace) return;
   if (!canUseParentShortcut(e.target)) return;
-  if (!isHoldingParentPreviewKey.value || !isShowingParentPreview.value || !activeParentImageNode.value) return;
+  if (!isHoldingParentPreviewKey.value || !isShowingParentPreview.value || !previewLineageNode.value) return;
 
   e.preventDefault();
+  const targetNode = previewLineageNode.value;
+  if (!targetNode) return;
   suppressParentPreviewUntilKeyup.value = true;
-  isShowingParentPreview.value = false;
+  hideLineagePreview();
   resetTransientSelectionState();
-  store.setActiveNode(activeParentImageNode.value.id);
+  store.setActiveNode(targetNode.id);
 }
 
 function handleGlobalKeyUp(e: KeyboardEvent) {
@@ -617,7 +662,7 @@ watch(() => props.isShortcutSuspended, (isShortcutSuspended) => {
 
 watch(() => store.activeNodeId, () => {
   resetTransientSelectionState();
-  isShowingParentPreview.value = false;
+  resetParentPreviewState();
   canvasView.value = { zoom: 1, zoomPercent: 100, canPan: false };
 });
 </script>
@@ -626,9 +671,10 @@ watch(() => store.activeNodeId, () => {
   <main v-show="isActive" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
     <div
       class="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-surface/80 backdrop-blur-md px-4 py-2 rounded-full border border-border flex items-center gap-4 text-sm shadow-xl tooltip-container">
-      <template v-if="isShowingParentPreview && activeParentImageNode">
+      <template v-if="isShowingParentPreview && previewLineageNode">
         <span class="text-[11px] text-textMuted tracking-wide">
-          Parent Preview: release <span class="text-textMain font-semibold">A</span> to return,
+          {{ previewLineageLabel }}: <span class="text-textMain font-semibold">Up/Down</span> to navigate,
+          release <span class="text-textMain font-semibold">A</span> to return,
           press <span class="text-textMain font-semibold">Space</span> to restore this version
         </span>
       </template>
@@ -677,7 +723,7 @@ watch(() => store.activeNodeId, () => {
             :key="activeImageNode.id"
             ref="canvasRef"
             :imageSrc="activeImageNode.blobBase64"
-            :preview-src="isShowingParentPreview && activeParentImageNode ? activeParentImageNode.blobBase64 : null"
+            :preview-src="isShowingParentPreview && previewLineageNode && previewLineageNode.id !== activeImageNode?.id ? previewLineageNode.blobBase64 : null"
             :overlay-src="!isShowingParentPreview && isDensityOverlayEnabled ? densityOverlaySrc : null"
             :overlay-opacity="densityOverlayOpacity"
             :targetRatio="isAutoRatio ? 'auto' : aspectRatio"

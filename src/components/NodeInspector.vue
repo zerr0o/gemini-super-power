@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watchEffect } from 'vue';
-import { Download, Image as ImageIcon, Layers, Link2, Sparkles } from 'lucide-vue-next';
+import { Check, Copy, Download, Image as ImageIcon, Layers, Link2, Sparkles } from 'lucide-vue-next';
 import { useAppStore } from '../stores/appStore';
 import type { ImageDimensions } from '../stores/appStore';
 import {
@@ -29,6 +29,8 @@ const exportStatus = ref('');
 const exportError = ref('');
 const generatedImageSize = ref<ImageDimensions | null>(null);
 const finalImageSize = ref<ImageDimensions | null>(null);
+const promptCopyState = ref<'idle' | 'copied' | 'error'>('idle');
+let promptCopyResetTimer: ReturnType<typeof setTimeout> | null = null;
 
 const workspaceName = computed(() => store.activeWorkspace?.name || 'workspace');
 const stackSummary = ref<Awaited<ReturnType<typeof buildBranchLayerStack>> | null>(null);
@@ -98,6 +100,39 @@ function handleExportFailure(error: unknown) {
   exportError.value = message;
 }
 
+async function copyPrompt() {
+  const prompt = activeImageNode.value?.prompt || '';
+  if (!prompt) return;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(prompt);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = prompt;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+
+    promptCopyState.value = 'copied';
+  } catch {
+    promptCopyState.value = 'error';
+  }
+
+  if (promptCopyResetTimer) {
+    clearTimeout(promptCopyResetTimer);
+  }
+
+  promptCopyResetTimer = setTimeout(() => {
+    promptCopyState.value = 'idle';
+  }, 1600);
+}
+
 async function exportLayerPackage() {
   if (!activeImageNode.value) return;
 
@@ -134,7 +169,7 @@ async function exportPsd() {
 </script>
 
 <template>
-  <div class="w-full h-full flex flex-col gap-6 max-w-6xl mx-auto pt-8">
+  <div class="node-inspector-scroll w-full h-full min-h-0 overflow-y-auto pr-2 pb-8 flex flex-col gap-6 max-w-6xl mx-auto pt-8">
     <div class="flex items-end justify-between gap-6 border-b border-border pb-4">
       <div>
         <h2 class="text-2xl font-semibold text-textMain">Node Inspector</h2>
@@ -293,7 +328,17 @@ async function exportPsd() {
           </div>
 
           <div>
-            <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Prompt</p>
+            <div class="flex items-center justify-between gap-3">
+              <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Prompt</p>
+              <button
+                class="shrink-0 px-2.5 py-1 rounded-lg border border-border bg-background/60 text-[11px] text-textMuted hover:text-primary hover:border-primary transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-default"
+                :disabled="!activeImageNode.prompt"
+                @click="copyPrompt">
+                <Check v-if="promptCopyState === 'copied'" :size="12" class="text-green-300" />
+                <Copy v-else :size="12" />
+                {{ promptCopyState === 'copied' ? 'Copied' : promptCopyState === 'error' ? 'Retry' : 'Copy' }}
+              </button>
+            </div>
             <div class="mt-2 rounded-xl border border-border bg-background/60 p-4 whitespace-pre-wrap text-sm leading-relaxed">
               {{ activeImageNode.prompt || 'No prompt recorded.' }}
             </div>
@@ -377,3 +422,29 @@ async function exportPsd() {
     </template>
   </div>
 </template>
+
+<style scoped>
+.node-inspector-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(250, 204, 21, 0.68) rgba(255, 255, 255, 0.05);
+}
+
+.node-inspector-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.node-inspector-scroll::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border-radius: 999px;
+}
+
+.node-inspector-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(250, 204, 21, 0.88), rgba(245, 158, 11, 0.62));
+  border: 2px solid rgba(12, 12, 12, 0.72);
+  border-radius: 999px;
+}
+
+.node-inspector-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(253, 224, 71, 0.96), rgba(249, 115, 22, 0.72));
+}
+</style>
