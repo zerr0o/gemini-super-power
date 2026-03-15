@@ -21,6 +21,11 @@ export interface ModificationBox {
   originalHeight: number;
 }
 
+export interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
 export interface ImageNode {
   id: string;
   parentId: string | null;
@@ -32,6 +37,8 @@ export interface ImageNode {
   modificationBox?: ModificationBox | null;
   referenceSnapshots?: ReferenceImageAsset[];
   geminiResultBase64?: string | null;
+  generatedImageSize?: ImageDimensions | null;
+  finalImageSize?: ImageDimensions | null;
   finalResultBase64?: string;
   finalResultThumbnailBase64?: string | null;
 }
@@ -102,6 +109,15 @@ export const useAppStore = defineStore('app', () => {
     };
   }
 
+  function cloneImageDimensions(dimensions: ImageDimensions | null | undefined): ImageDimensions | null {
+    if (!dimensions) return null;
+
+    return {
+      width: dimensions.width,
+      height: dimensions.height,
+    };
+  }
+
   function normalizeImageNode(node: ImageNode): ImageNode {
     return {
       ...node,
@@ -109,6 +125,8 @@ export const useAppStore = defineStore('app', () => {
       modificationBox: cloneModificationBox(node.modificationBox),
       referenceSnapshots: (node.referenceSnapshots ?? []).map(reference => normalizeReferenceImage(reference)),
       geminiResultBase64: node.geminiResultBase64 ?? null,
+      generatedImageSize: cloneImageDimensions(node.generatedImageSize),
+      finalImageSize: cloneImageDimensions(node.finalImageSize),
       finalResultBase64: node.finalResultBase64 ?? node.blobBase64,
       finalResultThumbnailBase64: node.finalResultThumbnailBase64 ?? null,
     };
@@ -152,6 +170,8 @@ export const useAppStore = defineStore('app', () => {
       modificationBox: cloneModificationBox(node.modificationBox),
       referenceSnapshots: (node.referenceSnapshots ?? []).map(reference => serializeReferenceImage(reference)),
       geminiResultBase64: node.geminiResultBase64 ?? null,
+      generatedImageSize: cloneImageDimensions(node.generatedImageSize),
+      finalImageSize: cloneImageDimensions(node.finalImageSize),
       finalResultBase64: node.finalResultBase64 && node.finalResultBase64 !== node.blobBase64 ? node.finalResultBase64 : undefined,
       finalResultThumbnailBase64: thumbnail,
     };
