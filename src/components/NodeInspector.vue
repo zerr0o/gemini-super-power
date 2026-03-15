@@ -288,7 +288,7 @@ async function exportPsd() {
           </div>
 
           <div class="rounded-xl border border-border bg-background/60 p-4 text-sm text-textMuted leading-relaxed">
-            The export uses the active branch from root to the selected node. Patch layers keep their saved crop position when possible; legacy nodes fall back to full-frame snapshots.
+            The export uses the active branch from root to the selected node. Patch layers keep their saved crop position when possible, saved layer masks are exported as PNGs and embedded as editable PSD masks, and legacy nodes fall back to full-frame snapshots.
           </div>
         </section>
       </div>
