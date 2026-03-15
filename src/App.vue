@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { nextTick, ref } from 'vue';
 import { Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import GenerationView from './views/GenerationView.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
+import NodeInspector from './components/NodeInspector.vue';
 import { useAppStore } from './stores/appStore';
 
 type AppTab = 'generation' | 'history' | 'tools' | 'settings';
 
 const activeTab = ref<AppTab>('generation');
 const store = useAppStore();
-const activeImageNode = computed(() => store.nodes.find(n => n.id === store.activeNodeId) || null);
 
 const showRenameModal = ref(false);
 const renameInput = ref('');
@@ -125,41 +125,7 @@ function confirmDelete() {
                      @select="id => { store.setActiveNode(id); activeTab = 'generation'; }" />
                </template>
                <template v-else-if="activeTab === 'tools'">
-                  <div class="w-full h-full flex flex-col gap-6 max-w-2xl mx-auto pt-8">
-                     <h2 class="text-2xl font-semibold mb-4 text-textMain border-b border-border pb-2">Node Inspector
-                     </h2>
-                     <template v-if="activeImageNode">
-                        <div class="bg-surface border border-border rounded p-4 flex flex-col gap-4">
-                           <div>
-                              <label class="text-xs text-textMuted uppercase tracking-wider font-semibold">Node
-                                 ID</label>
-                              <p class="text-sm font-mono mt-1">{{ activeImageNode.id }}</p>
-                           </div>
-                           <div>
-                              <label class="text-xs text-textMuted uppercase tracking-wider font-semibold">Model
-                                 Used</label>
-                              <p class="text-sm text-primary mt-1">{{ activeImageNode.model }}</p>
-                           </div>
-                           <div>
-                              <label class="text-xs text-textMuted uppercase tracking-wider font-semibold">Generated
-                                 At</label>
-                              <p class="text-sm mt-1">{{ new Date(activeImageNode.createdAt || 0).toLocaleString() }}
-                              </p>
-                           </div>
-                           <div>
-                              <label
-                                 class="text-xs text-textMuted uppercase tracking-wider font-semibold">Prompt</label>
-                              <div
-                                 class="text-sm mt-1 bg-background p-3 rounded border border-border whitespace-pre-wrap">
-                                 {{ activeImageNode.prompt }}
-                              </div>
-                           </div>
-                        </div>
-                     </template>
-                     <template v-else>
-                        <p class="text-textMuted">No image node selected to inspect.</p>
-                     </template>
-                  </div>
+                  <NodeInspector />
                </template>
 
                <template v-else-if="activeTab === 'settings'">

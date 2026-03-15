@@ -2,6 +2,25 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { get, set } from 'idb-keyval';
 
+export type ReferenceImageKind = 'upload' | 'crop' | 'implicit-node';
+
+export interface ReferenceImageAsset {
+  id: string;
+  dataUrl: string;
+  sourceUri: string | null;
+  sourceNodeId: string | null;
+  kind: ReferenceImageKind;
+}
+
+export interface ModificationBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  originalWidth: number;
+  originalHeight: number;
+}
+
 export interface ImageNode {
   id: string;
   parentId: string | null;
@@ -9,6 +28,12 @@ export interface ImageNode {
   prompt: string;
   model: string;
   createdAt: number;
+  sourceUri?: string | null;
+  modificationBox?: ModificationBox | null;
+  referenceSnapshots?: ReferenceImageAsset[];
+  geminiResultBase64?: string | null;
+  finalResultBase64?: string;
+  finalResultThumbnailBase64?: string | null;
 }
 
 export interface Workspace {
@@ -17,8 +42,10 @@ export interface Workspace {
   createdAt: number;
   nodes: ImageNode[];
   activeNodeId: string | null;
-  referenceImages: string[];
+  referenceImages: ReferenceImageAsset[];
 }
+
+type ReferenceImageInput = string | (Partial<ReferenceImageAsset> & Pick<ReferenceImageAsset, 'dataUrl'>);
 
 export const useAppStore = defineStore('app', () => {
   const workspaces = ref<Workspace[]>([]);
@@ -38,9 +65,112 @@ export const useAppStore = defineStore('app', () => {
   const activeNodeId = computed(() => activeWorkspace.value?.activeNodeId || null);
   const referenceImages = computed(() => activeWorkspace.value?.referenceImages || []);
 
+  function createReferenceImageId() {
+    return `ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function normalizeReferenceImage(reference: ReferenceImageInput): ReferenceImageAsset {
+    if (typeof reference === 'string') {
+      return {
+        id: createReferenceImageId(),
+        dataUrl: reference,
+        sourceUri: null,
+        sourceNodeId: null,
+        kind: 'upload',
+      };
+    }
+
+    return {
+      id: reference.id || createReferenceImageId(),
+      dataUrl: reference.dataUrl || '',
+      sourceUri: reference.sourceUri ?? null,
+      sourceNodeId: reference.sourceNodeId ?? null,
+      kind: reference.kind ?? 'upload',
+    };
+  }
+
+  function cloneModificationBox(box: ModificationBox | null | undefined): ModificationBox | null {
+    if (!box) return null;
+
+    return {
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+      originalWidth: box.originalWidth,
+      originalHeight: box.originalHeight,
+    };
+  }
+
+  function normalizeImageNode(node: ImageNode): ImageNode {
+    return {
+      ...node,
+      sourceUri: node.sourceUri ?? null,
+      modificationBox: cloneModificationBox(node.modificationBox),
+      referenceSnapshots: (node.referenceSnapshots ?? []).map(reference => normalizeReferenceImage(reference)),
+      geminiResultBase64: node.geminiResultBase64 ?? null,
+      finalResultBase64: node.finalResultBase64 ?? node.blobBase64,
+      finalResultThumbnailBase64: node.finalResultThumbnailBase64 ?? null,
+    };
+  }
+
+  function normalizeWorkspace(workspace: Workspace): Workspace {
+    const rawReferenceImages = (workspace.referenceImages ?? []) as ReferenceImageInput[];
+
+    return {
+      ...workspace,
+      activeNodeId: workspace.activeNodeId ?? null,
+      nodes: (workspace.nodes ?? []).map(node => normalizeImageNode(node)),
+      referenceImages: rawReferenceImages.map(reference => normalizeReferenceImage(reference)),
+    };
+  }
+
+  function serializeReferenceImage(reference: ReferenceImageAsset): ReferenceImageAsset {
+    return {
+      id: reference.id,
+      dataUrl: reference.kind === 'implicit-node' && reference.sourceNodeId ? '' : reference.dataUrl,
+      sourceUri: reference.sourceUri ?? null,
+      sourceNodeId: reference.sourceNodeId ?? null,
+      kind: reference.kind,
+    };
+  }
+
+  function serializeImageNode(node: ImageNode): ImageNode {
+    const fullResult = node.finalResultBase64 ?? node.blobBase64;
+    const thumbnail = node.finalResultThumbnailBase64 && node.finalResultThumbnailBase64 !== fullResult
+      ? node.finalResultThumbnailBase64
+      : null;
+
+    return {
+      id: node.id,
+      parentId: node.parentId ?? null,
+      blobBase64: node.blobBase64,
+      prompt: node.prompt,
+      model: node.model,
+      createdAt: node.createdAt,
+      sourceUri: node.sourceUri ?? null,
+      modificationBox: cloneModificationBox(node.modificationBox),
+      referenceSnapshots: (node.referenceSnapshots ?? []).map(reference => serializeReferenceImage(reference)),
+      geminiResultBase64: node.geminiResultBase64 ?? null,
+      finalResultBase64: node.finalResultBase64 && node.finalResultBase64 !== node.blobBase64 ? node.finalResultBase64 : undefined,
+      finalResultThumbnailBase64: thumbnail,
+    };
+  }
+
+  function serializeWorkspace(workspace: Workspace): Workspace {
+    return {
+      id: workspace.id,
+      name: workspace.name,
+      createdAt: workspace.createdAt,
+      activeNodeId: workspace.activeNodeId ?? null,
+      nodes: workspace.nodes.map(node => serializeImageNode(node)),
+      referenceImages: workspace.referenceImages.map(reference => serializeReferenceImage(reference)),
+    };
+  }
+
   async function saveToIdb() {
     try {
-      const rawData = JSON.parse(JSON.stringify(workspaces.value));
+      const rawData = workspaces.value.map(workspace => serializeWorkspace(workspace));
       await set('boldbrush_workspaces', rawData);
     } catch (e) {
       console.error("Failed to save workspaces to idb:", e);
@@ -54,8 +184,8 @@ export const useAppStore = defineStore('app', () => {
       let savedWorkspaces = await get<Workspace[]>('boldbrush_workspaces');
       
       if (savedWorkspaces && savedWorkspaces.length > 0) {
-        workspaces.value = savedWorkspaces;
-        activeWorkspaceId.value = savedWorkspaces[0].id;
+        workspaces.value = savedWorkspaces.map(workspace => normalizeWorkspace(workspace));
+        activeWorkspaceId.value = workspaces.value[0].id;
       } else {
         // 2. Migration Layer: Check if legacy flat array exists
         const legacyNodes = await get<ImageNode[]>('boldbrush_history');
@@ -64,12 +194,12 @@ export const useAppStore = defineStore('app', () => {
              id: 'legacy-' + Date.now().toString(),
              name: 'Legacy Project',
              createdAt: Date.now(),
-             nodes: legacyNodes,
+             nodes: legacyNodes.map(node => normalizeImageNode(node)),
              activeNodeId: legacyNodes[legacyNodes.length - 1].id,
              referenceImages: []
-           };
-           workspaces.value = [migratedWorkspace];
-           activeWorkspaceId.value = migratedWorkspace.id;
+            };
+            workspaces.value = [migratedWorkspace];
+            activeWorkspaceId.value = migratedWorkspace.id;
            await saveToIdb(); 
         } else {
            // 3. Complete new install: Create default empty workspace
@@ -133,7 +263,7 @@ export const useAppStore = defineStore('app', () => {
     }
     if (!ws) return;
     
-    ws.nodes.push(node);
+    ws.nodes.push(normalizeImageNode(node));
     ws.activeNodeId = node.id;
     saveToIdb();
   }
@@ -172,12 +302,21 @@ export const useAppStore = defineStore('app', () => {
     saveToIdb();
   }
 
-  function addReferenceImage(base64: string) {
+  function addReferenceImage(reference: ReferenceImageInput) {
     if (!activeWorkspace.value) return;
     if (activeWorkspace.value.referenceImages.length < 14) {
-      activeWorkspace.value.referenceImages.push(base64);
+      activeWorkspace.value.referenceImages.push(normalizeReferenceImage(reference));
       saveToIdb();
     }
+  }
+
+  function prependReferenceImage(reference: ReferenceImageInput) {
+    if (!activeWorkspace.value) return;
+    activeWorkspace.value.referenceImages.unshift(normalizeReferenceImage(reference));
+    if (activeWorkspace.value.referenceImages.length > 14) {
+      activeWorkspace.value.referenceImages.splice(14);
+    }
+    saveToIdb();
   }
 
   function removeReferenceImage(index: number) {
@@ -203,7 +342,8 @@ export const useAppStore = defineStore('app', () => {
     addNode, 
     setActiveNode, 
     deleteNodeAndChildren,
-    addReferenceImage, 
+    addReferenceImage,
+    prependReferenceImage,
     removeReferenceImage 
   };
 });

@@ -237,12 +237,12 @@ const connections = computed(() => {
                  @click.stop="handleNodeClick(node.id)">
                  
                  <div class="h-28 w-full bg-black flex items-center justify-center relative p-1 pointer-events-none rounded-t overflow-hidden">
-                    <img :src="node.blobBase64" class="max-w-full max-h-full object-contain rounded-sm" draggable="false" />
+                    <img :src="node.finalResultThumbnailBase64 || node.finalResultBase64 || node.blobBase64" class="max-w-full max-h-full object-contain rounded-sm" draggable="false" />
                  </div>
                  
                  <!-- Hover Image Popout -->
                  <div class="hidden group-hover:flex absolute z-50 -inset-24 bg-black border border-primary rounded-xl shadow-[0_10px_60px_rgba(0,0,0,1)] items-center justify-center pointer-events-none">
-                    <img :src="node.blobBase64" class="max-w-full max-h-full object-contain rounded-lg" draggable="false" />
+                    <img :src="node.finalResultBase64 || node.blobBase64" class="max-w-full max-h-full object-contain rounded-lg" draggable="false" />
                  </div>
                  <div class="flex-1 w-full p-2 flex flex-col gap-1 justify-center bg-surfaceDark border-t border-border/50">
                     <p class="text-[11px] text-text font-medium truncate" :title="node.prompt">{{ node.prompt || 'Base Image' }}</p>
