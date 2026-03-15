@@ -214,4 +214,4 @@ Workspace data is only persistent after a successful IndexedDB save. If the app 
 
 ## Current Version
 
-- `0.1.0`
+- `0.0.2`

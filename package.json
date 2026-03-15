@@ -2,7 +2,7 @@
   "name": "gemini-super-power",
   "productName": "Gemini Super Power",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.2",
   "description": "Desktop workspace for Gemini image generation, history navigation, layer masks, and layered exports.",
   "author": "zerr0o",
   "homepage": "https://github.com/zerr0o/gemini-super-power",
