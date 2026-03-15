@@ -141,6 +141,24 @@ function confirmDelete() {
                            placeholder="AIzaSy..." />
                         <p class="text-xs text-textMuted mt-1">Required to generate and modify images with Nano Banana 2
                            and Pro models.</p>
+                        <div class="mt-3 rounded-xl border border-border bg-surface p-4 text-sm text-textMuted flex flex-col gap-3">
+                           <div>
+                              <p class="text-xs uppercase tracking-[0.2em] text-textMuted font-semibold">How to create a Google AI Studio key</p>
+                              <ol class="mt-2 leading-relaxed flex flex-col gap-1 list-decimal list-inside">
+                                 <li>
+                                    Open
+                                    <a href="https://aistudio.google.com/app/api-keys" target="_blank" rel="noreferrer"
+                                       class="text-primary hover:underline">Google AI Studio API Keys</a>.
+                                 </li>
+                                 <li>Sign in with your Google account.</li>
+                                 <li>Click <span class="text-textMain font-medium">Create API key</span>.</li>
+                                 <li>Copy the generated key and paste it into the field above.</li>
+                              </ol>
+                           </div>
+                           <p class="text-xs text-textMuted/80">
+                              Keep this key private. Anyone with it can use your Google AI quota.
+                           </p>
+                        </div>
                      </div>
                   </div>
                </template>
