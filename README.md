@@ -14,6 +14,24 @@ Gemini Super Power is a desktop creative workspace for iterative Gemini image ge
 - Workspace/session persistence in IndexedDB
 - Electron desktop packaging and auto-update support through GitHub Releases
 
+## Screenshots
+
+### Generation View
+
+![Generation view](readme-images/GeminiSuperPower3.png)
+
+### History Graph
+
+![History graph](readme-images/GeminiSuperPower4.png)
+
+### Node Inspector
+
+![Node inspector](readme-images/GeminiSuperPower1.jpg)
+
+### Layer Mask Studio
+
+![Layer mask studio](readme-images/GeminiSuperPower2.png)
+
 ## Stack
 
 - Vue 3
@@ -146,14 +164,20 @@ To publish a release:
 
 1. Make sure the GitHub repository has been renamed to `gemini-super-power`.
 2. Create a GitHub token with release upload permissions.
-3. Export `GH_TOKEN`.
-4. Run:
+3. Copy [`.env.publish.example`](./.env.publish.example) to `.env.publish.local`.
+4. Paste your token into:
+
+```env
+GH_TOKEN=your_github_token
+```
+
+5. Run:
 
 ```bash
 npm run publish
 ```
 
-This uses `electron-builder --publish always` and the GitHub publish config from `electron-builder.json5`.
+The publish script reads `.env.publish.local` first, then `.env.publish`, and only falls back to the current terminal environment if no project-specific publish file exists.
 
 ## Auto Update Behavior
 

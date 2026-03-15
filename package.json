@@ -18,7 +18,7 @@
     "dev": "vite",
     "build": "vue-tsc && vite build && electron-builder --publish never",
     "build:dir": "vue-tsc && vite build && electron-builder --dir --publish never",
-    "publish": "vue-tsc && vite build && electron-builder --publish always",
+    "publish": "vue-tsc && vite build && node scripts/publish.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
