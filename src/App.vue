@@ -130,7 +130,7 @@ function confirmDelete() {
          class="h-10 bg-surface border-b border-border flex items-center justify-between px-4 app-region-drag select-none shrink-0">
          <div class="flex items-center gap-4">
             <div class="text-[10px] font-bold tracking-[0.2em] text-textMuted flex items-center">
-               BOLDBRUSH <span class="text-primary ml-1">SUPERPOWER</span>
+               GEMINI <span class="text-primary ml-1">SUPER POWER</span>
             </div>
             <div class="w-px h-4 bg-border"></div>
 
