@@ -202,7 +202,7 @@ const isDensityOverlayEnabled = ref(false);
 const densityOverlaySrc = ref<string | null>(null);
 const densitySummary = ref<Awaited<ReturnType<typeof buildPixelDensitySummary>> | null>(null);
 const densityOverlayOpacity = ref(0.7);
-const isDensityPanelCollapsed = ref(false);
+const isDensityPanelCollapsed = ref(true);
 
 const workAreaSize = computed(() => {
   if (activeCropData.value) {
@@ -278,10 +278,26 @@ function syncSelectedMaskLayer() {
   selectedMaskLayerNodeId.value = stack.layers[stack.layers.length - 1].nodeId;
 }
 
+function syncMaskEditorEnabledFromSelection() {
+  const hasSavedMask = !!selectedMaskLayer.value?.layerMask?.dataUrl;
+  isMaskEditorEnabled.value = hasSavedMask;
+  if (hasSavedMask) {
+    canvasRef.value?.cancelCrop?.();
+    resetTransientSelectionState();
+  } else {
+    isMaskViewEnabled.value = false;
+  }
+}
+
 function setSidebarTab(nextTab: 'prompt' | 'mask') {
   activeSidebarTab.value = nextTab;
   if (nextTab !== 'mask' && isMaskEditorEnabled.value) {
     setMaskEditorEnabled(false);
+    return;
+  }
+
+  if (nextTab === 'mask') {
+    syncMaskEditorEnabledFromSelection();
   }
 }
 
@@ -815,6 +831,7 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
   const isArrowUp = e.key === 'ArrowUp';
   const isArrowDown = e.key === 'ArrowDown';
   const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && key === 'z';
+  const isBrushModeToggle = key === 'x';
 
   if (isUndo && isMaskEditorEnabled.value && !isTypingTarget(e.target)) {
     if (maskEditorState.value.canUndo) {
@@ -841,7 +858,7 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
   }
 
   if (
-    key === 'x'
+    isBrushModeToggle
     && !e.ctrlKey
     && !e.metaKey
     && !e.altKey
@@ -932,6 +949,12 @@ watch(canEditMasks, (nextValue) => {
     setMaskEditorEnabled(false);
   } else {
     syncSelectedMaskLayer();
+  }
+});
+
+watch(() => selectedMaskLayerNodeId.value, () => {
+  if (activeSidebarTab.value === 'mask') {
+    syncMaskEditorEnabledFromSelection();
   }
 });
 
@@ -1391,16 +1414,24 @@ watch(() => store.activeNodeId, () => {
               {{ selectedMaskLayerLabel }}
             </div>
 
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-[11px] uppercase tracking-[0.2em] text-textMuted">Brush Mode</span>
+              <span class="inline-flex items-center rounded-full border border-border bg-background/60 px-2 py-1 text-[10px] font-medium text-textMuted">
+                Shortcut
+                <span class="ml-1.5 rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">X</span>
+              </span>
+            </div>
+
             <div class="inline-flex rounded-xl border border-border overflow-hidden">
               <button
-                class="px-3 py-1.5 text-xs transition-colors"
+                class="px-3 py-1.5 text-xs transition-colors min-w-[92px]"
                 :class="maskBrushMode === 'hide' ? 'bg-primary text-[#000] font-semibold' : 'bg-background text-textMuted hover:text-primary'"
                 :disabled="!isMaskEditorEnabled"
                 @click="maskBrushMode = 'hide'">
                 Hide
               </button>
               <button
-                class="px-3 py-1.5 text-xs transition-colors"
+                class="px-3 py-1.5 text-xs transition-colors min-w-[92px]"
                 :class="maskBrushMode === 'reveal' ? 'bg-primary text-[#000] font-semibold' : 'bg-background text-textMuted hover:text-primary'"
                 :disabled="!isMaskEditorEnabled"
                 @click="maskBrushMode = 'reveal'">
@@ -1451,6 +1482,7 @@ watch(() => store.activeNodeId, () => {
                 <Eye v-if="isMaskViewEnabled" :size="13" />
                 <EyeOff v-else :size="13" />
                 {{ isMaskViewEnabled ? 'Mask View' : 'Live View' }}
+                <span class="rounded border border-current/30 px-1.5 py-0.5 text-[10px] leading-none">Z</span>
               </button>
 
               <button

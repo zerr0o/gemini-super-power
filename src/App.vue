@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
-import { Brush, Check, Download, Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
+import { computed, nextTick, onMounted, ref } from 'vue';
+import { Brush, Check, Download, Loader2, Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
 import GenerationView from './views/GenerationView.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import NodeInspector from './components/NodeInspector.vue';
@@ -20,7 +20,70 @@ const showDeleteModal = ref(false);
 const quickExportState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 let quickExportResetTimer: ReturnType<typeof setTimeout> | null = null;
 
+type AppUpdateStatus = 'unsupported' | 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error';
+
+interface AppUpdateState {
+   enabled: boolean;
+   status: AppUpdateStatus;
+   currentVersion: string;
+   availableVersion: string | null;
+   progress: number | null;
+   message: string;
+   feedUrl: string | null;
+}
+
 const activeImageNode = computed(() => store.nodes.find(node => node.id === store.activeNodeId) || null);
+const appUpdateState = ref<AppUpdateState>({
+   enabled: false,
+   status: 'disabled',
+   currentVersion: '0.0.0',
+   availableVersion: null,
+   progress: null,
+   message: 'Auto update status unavailable.',
+   feedUrl: null,
+});
+const isCheckingForUpdates = computed(() =>
+   appUpdateState.value.status === 'checking' || appUpdateState.value.status === 'downloading'
+);
+const canCheckForUpdates = computed(() =>
+   !!window.ipcRenderer?.invoke && !isCheckingForUpdates.value
+);
+const canInstallUpdate = computed(() =>
+   !!window.ipcRenderer?.invoke && appUpdateState.value.status === 'downloaded'
+);
+const updateStatusLabel = computed(() => {
+   switch (appUpdateState.value.status) {
+      case 'unsupported': return 'Dev Only';
+      case 'disabled': return 'Disabled';
+      case 'idle': return 'Ready';
+      case 'checking': return 'Checking';
+      case 'available': return 'Found';
+      case 'downloading': return 'Downloading';
+      case 'downloaded': return 'Ready To Install';
+      case 'up-to-date': return 'Up To Date';
+      case 'error': return 'Error';
+      default: return 'Unknown';
+   }
+});
+const updateStatusClass = computed(() => {
+   switch (appUpdateState.value.status) {
+      case 'downloaded':
+         return 'border-green-400/35 bg-green-400/10 text-green-300';
+      case 'up-to-date':
+         return 'border-emerald-400/35 bg-emerald-400/10 text-emerald-300';
+      case 'checking':
+      case 'downloading':
+      case 'available':
+         return 'border-primary/35 bg-primary/10 text-primary';
+      case 'error':
+         return 'border-red-400/35 bg-red-400/10 text-red-300';
+      case 'disabled':
+      case 'unsupported':
+         return 'border-border bg-background/60 text-textMuted';
+      default:
+         return 'border-border bg-background/60 text-textMain';
+   }
+});
 
 function sanitizeFileNameSegment(value: string | null | undefined, fallback: string) {
    const sanitized = (value || '')
@@ -122,6 +185,52 @@ function confirmDelete() {
    }
    showDeleteModal.value = false;
 }
+
+async function refreshAppUpdateState() {
+   if (!window.ipcRenderer?.invoke) return;
+   const nextState = await window.ipcRenderer.invoke('app-updater:get-state');
+   if (nextState) {
+      appUpdateState.value = nextState as AppUpdateState;
+   }
+}
+
+async function checkForAppUpdates() {
+   if (!window.ipcRenderer?.invoke || isCheckingForUpdates.value) return;
+   const nextState = await window.ipcRenderer.invoke('app-updater:check');
+   if (nextState) {
+      appUpdateState.value = nextState as AppUpdateState;
+   }
+}
+
+async function installDownloadedUpdate() {
+   if (!window.ipcRenderer?.invoke || !canInstallUpdate.value) return;
+   await window.ipcRenderer.invoke('app-updater:install');
+}
+
+function formatUpdateProgress(progress: number | null) {
+   if (typeof progress !== 'number' || !Number.isFinite(progress)) return '--';
+   return `${Math.round(progress)}%`;
+}
+
+onMounted(() => {
+   if (!window.ipcRenderer?.invoke) {
+      appUpdateState.value = {
+         enabled: false,
+         status: 'unsupported',
+         currentVersion: 'dev',
+         availableVersion: null,
+         progress: null,
+         message: 'Auto updates are available only inside the Electron desktop app.',
+         feedUrl: null,
+      };
+      return;
+   }
+
+   void refreshAppUpdateState();
+   window.ipcRenderer.on('app-updater:state', (_event, nextState) => {
+      appUpdateState.value = nextState as AppUpdateState;
+   });
+});
 </script>
 
 <template>
@@ -252,6 +361,76 @@ function confirmDelete() {
                            </div>
                            <p class="text-xs text-textMuted/80">
                               Keep this key private. Anyone with it can use your Google AI quota.
+                           </p>
+                        </div>
+                     </div>
+
+                     <div class="flex flex-col gap-2">
+                        <label class="text-xs text-textMuted uppercase tracking-wider font-semibold">Application Updates</label>
+                        <div class="rounded-xl border border-border bg-surface p-4 flex flex-col gap-4">
+                           <div class="flex items-start justify-between gap-4">
+                              <div class="min-w-0">
+                                 <p class="text-sm font-semibold text-textMain">Gemini Super Power {{ appUpdateState.currentVersion }}</p>
+                                 <p class="mt-1 text-xs text-textMuted leading-relaxed">{{ appUpdateState.message }}</p>
+                              </div>
+                              <span
+                                 class="shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium"
+                                 :class="updateStatusClass">
+                                 {{ updateStatusLabel }}
+                              </span>
+                           </div>
+
+                           <div class="grid grid-cols-2 gap-3 text-xs">
+                              <div class="rounded-lg border border-white/8 bg-background/50 px-3 py-2">
+                                 <p class="text-textMuted uppercase tracking-[0.16em]">Target Version</p>
+                                 <p class="mt-1 text-textMain">{{ appUpdateState.availableVersion || '--' }}</p>
+                              </div>
+                              <div class="rounded-lg border border-white/8 bg-background/50 px-3 py-2">
+                                 <p class="text-textMuted uppercase tracking-[0.16em]">Feed</p>
+                                 <p class="mt-1 text-textMain truncate" :title="appUpdateState.feedUrl || ''">{{ appUpdateState.feedUrl || 'GitHub Releases' }}</p>
+                              </div>
+                           </div>
+
+                           <div
+                              v-if="appUpdateState.status === 'downloading' || appUpdateState.status === 'downloaded'"
+                              class="rounded-lg border border-white/8 bg-background/50 p-3 flex flex-col gap-2">
+                              <div class="flex items-center justify-between text-xs text-textMuted">
+                                 <span>Download Progress</span>
+                                 <span>{{ formatUpdateProgress(appUpdateState.progress) }}</span>
+                              </div>
+                              <div class="h-2 rounded-full bg-background overflow-hidden">
+                                 <div
+                                    class="h-full rounded-full bg-primary transition-[width] duration-200"
+                                    :style="{ width: `${Math.max(0, Math.min(100, appUpdateState.progress ?? 0))}%` }" />
+                              </div>
+                           </div>
+
+                           <div class="flex items-center gap-2">
+                              <button
+                                 @click="checkForAppUpdates"
+                                 :disabled="!canCheckForUpdates"
+                                 class="px-3 py-2 rounded-xl border text-xs transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                                 :class="canCheckForUpdates
+                                    ? 'border-border text-textMuted hover:border-primary hover:text-primary'
+                                    : 'border-border text-textMuted/60'">
+                                 <Loader2 v-if="isCheckingForUpdates" :size="13" class="animate-spin" />
+                                 <Download v-else :size="13" />
+                                 Check Now
+                              </button>
+                              <button
+                                 @click="installDownloadedUpdate"
+                                 :disabled="!canInstallUpdate"
+                                 class="px-3 py-2 rounded-xl border text-xs transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                                 :class="canInstallUpdate
+                                    ? 'border-primary bg-primary/10 text-primary hover:bg-primary/20'
+                                    : 'border-border text-textMuted/60'">
+                                 <Check :size="13" />
+                                 Install & Restart
+                              </button>
+                           </div>
+
+                           <p class="text-[11px] text-textMuted/80 leading-relaxed">
+                              Auto updates check automatically on app launch and download in the background. Releases are configured for <span class="text-textMain">GitHub Releases</span>, so publishing requires a valid <span class="text-textMain">GH_TOKEN</span> and the renamed repository to exist on GitHub.
                            </p>
                         </div>
                      </div>
