@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { Type, Search, Loader2, Info, X, Upload, Image as ImageIcon, Star } from 'lucide-vue-next';
-import CanvasSelection, { CropData } from '../components/CanvasSelection.vue';
+import CanvasSelection, { type CropConfirmAction, type CropData } from '../components/CanvasSelection.vue';
 import { useAppStore } from '../stores/appStore';
 import type { ReferenceImageAsset } from '../stores/appStore';
 import { generateImage, ASPECT_RATIO_VALUES, getSupportedAspectRatios, getSupportedResolutions } from '../services/geminiService';
@@ -40,6 +40,8 @@ const supportedResolutions = computed(() => getSupportedResolutions(model.value)
 const activeImageNode = computed(() => store.nodes.find(n => n.id === store.activeNodeId) || null);
 const primaryReference = computed(() => store.referenceImages[0] || null);
 const secondaryReferences = computed(() => store.referenceImages.slice(1));
+const hasExplicitPrimaryReference = computed(() => !!primaryReference.value);
+const canAddSecondaryReference = computed(() => store.referenceImages.length < 14);
 const implicitPrimaryReference = computed<ReferenceImageAsset | null>(() => {
   const activeNode = activeImageNode.value;
   if (!activeNode?.blobBase64) return null;
@@ -238,12 +240,25 @@ function resetParentPreviewState() {
   suppressParentPreviewUntilKeyup.value = false;
 }
 
-function handleCrop(data: CropData) {
+function handleCrop(data: CropData, action: CropConfirmAction = 'replace-primary') {
   const sourceNode = activeImageNode.value;
-  store.prependReferenceImage(createReferenceAsset(data.base64, 'crop', {
+  errorMsg.value = '';
+  const cropReference = createReferenceAsset(data.base64, 'crop', {
     sourceUri: sourceNode?.sourceUri ?? null,
     sourceNodeId: sourceNode?.id ?? null,
-  }));
+  });
+
+  if (action === 'add-secondary' && hasExplicitPrimaryReference.value) {
+    if (!canAddSecondaryReference.value) {
+      errorMsg.value = 'Reference limit reached. Remove one before adding another.';
+      return;
+    }
+
+    store.addReferenceImage(cropReference);
+    return;
+  }
+
+  store.setPrimaryReferenceImage(cropReference);
   activeCropData.value = data;
 }
 
@@ -557,6 +572,8 @@ watch(() => store.activeNodeId, () => {
             :preview-src="isShowingParentPreview && activeParentImageNode ? activeParentImageNode.blobBase64 : null"
             :targetRatio="isAutoRatio ? 'auto' : aspectRatio"
             :availableRatios="supportedAspectRatios"
+            :has-explicit-primary-reference="hasExplicitPrimaryReference"
+            :can-add-secondary-reference="canAddSecondaryReference"
             @cropped="handleCrop"
             @update:ratio="r => aspectRatio = r"
             @update:selection-px="handleSelectionPx"
