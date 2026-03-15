@@ -3,6 +3,7 @@ import { computed, ref, watchEffect } from 'vue';
 import { Check, Copy, Download, Image as ImageIcon, Layers, Link2, Sparkles } from 'lucide-vue-next';
 import { useAppStore } from '../stores/appStore';
 import type { ImageDimensions } from '../stores/appStore';
+import LayerMaskStudio from './LayerMaskStudio.vue';
 import {
   buildBranchLayerStack,
   buildBranchPsdExport,
@@ -222,11 +223,11 @@ async function exportPsd() {
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="rounded-xl border border-border bg-background/60 overflow-hidden">
               <div class="aspect-[4/3] bg-black flex items-center justify-center">
-                <img :src="activeImageNode.finalResultBase64 || activeImageNode.blobBase64" class="w-full h-full object-contain" />
+                <img :src="stackSummary?.finalCompositeDataUrl || activeImageNode.finalResultBase64 || activeImageNode.blobBase64" class="w-full h-full object-contain" />
               </div>
               <div class="p-3">
                 <p class="text-xs uppercase tracking-[0.2em] text-textMuted">Final Output</p>
-                <p class="text-sm mt-1">Current full image</p>
+                <p class="text-sm mt-1">Current full image with layer masks</p>
                 <p class="text-xs text-textMuted mt-1">{{ formatImageSize(finalImageSize) }}</p>
               </div>
             </div>
@@ -292,6 +293,10 @@ async function exportPsd() {
           </div>
         </section>
       </div>
+
+      <LayerMaskStudio
+        :stack="stackSummary"
+        :active-node-id="store.activeNodeId" />
 
       <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <section class="bg-surface border border-border rounded-2xl p-5 flex flex-col gap-4">

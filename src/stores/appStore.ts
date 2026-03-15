@@ -26,6 +26,13 @@ export interface ImageDimensions {
   height: number;
 }
 
+export interface LayerMaskPayload {
+  dataUrl: string;
+  width: number;
+  height: number;
+  updatedAt: number;
+}
+
 export interface ImageNode {
   id: string;
   parentId: string | null;
@@ -39,6 +46,7 @@ export interface ImageNode {
   geminiResultBase64?: string | null;
   generatedImageSize?: ImageDimensions | null;
   finalImageSize?: ImageDimensions | null;
+  layerMask?: LayerMaskPayload | null;
   finalResultBase64?: string;
   finalResultThumbnailBase64?: string | null;
 }
@@ -53,6 +61,7 @@ export interface Workspace {
 }
 
 type ReferenceImageInput = string | (Partial<ReferenceImageAsset> & Pick<ReferenceImageAsset, 'dataUrl'>);
+type LayerMaskInput = Partial<LayerMaskPayload> & Pick<LayerMaskPayload, 'dataUrl' | 'width' | 'height'>;
 
 export const useAppStore = defineStore('app', () => {
   const workspaces = ref<Workspace[]>([]);
@@ -118,6 +127,28 @@ export const useAppStore = defineStore('app', () => {
     };
   }
 
+  function normalizeLayerMask(mask: LayerMaskInput | LayerMaskPayload | null | undefined): LayerMaskPayload | null {
+    if (!mask || !mask.dataUrl) return null;
+
+    return {
+      dataUrl: mask.dataUrl,
+      width: Math.max(1, Math.round(mask.width || 1)),
+      height: Math.max(1, Math.round(mask.height || 1)),
+      updatedAt: mask.updatedAt ?? Date.now(),
+    };
+  }
+
+  function cloneLayerMask(mask: LayerMaskPayload | null | undefined): LayerMaskPayload | null {
+    if (!mask) return null;
+
+    return {
+      dataUrl: mask.dataUrl,
+      width: mask.width,
+      height: mask.height,
+      updatedAt: mask.updatedAt,
+    };
+  }
+
   function normalizeImageNode(node: ImageNode): ImageNode {
     return {
       ...node,
@@ -127,6 +158,7 @@ export const useAppStore = defineStore('app', () => {
       geminiResultBase64: node.geminiResultBase64 ?? null,
       generatedImageSize: cloneImageDimensions(node.generatedImageSize),
       finalImageSize: cloneImageDimensions(node.finalImageSize),
+      layerMask: normalizeLayerMask(node.layerMask),
       finalResultBase64: node.finalResultBase64 ?? node.blobBase64,
       finalResultThumbnailBase64: node.finalResultThumbnailBase64 ?? null,
     };
@@ -172,6 +204,7 @@ export const useAppStore = defineStore('app', () => {
       geminiResultBase64: node.geminiResultBase64 ?? null,
       generatedImageSize: cloneImageDimensions(node.generatedImageSize),
       finalImageSize: cloneImageDimensions(node.finalImageSize),
+      layerMask: cloneLayerMask(node.layerMask),
       finalResultBase64: node.finalResultBase64 && node.finalResultBase64 !== node.blobBase64 ? node.finalResultBase64 : undefined,
       finalResultThumbnailBase64: thumbnail,
     };
@@ -293,6 +326,15 @@ export const useAppStore = defineStore('app', () => {
     activeWorkspace.value.activeNodeId = id;
     saveToIdb();
   }
+
+  function setNodeLayerMask(nodeId: string, mask: LayerMaskInput | null) {
+    if (!activeWorkspace.value) return;
+    const node = activeWorkspace.value.nodes.find(entry => entry.id === nodeId);
+    if (!node) return;
+
+    node.layerMask = normalizeLayerMask(mask);
+    saveToIdb();
+  }
   
   function deleteNodeAndChildren(nodeId: string) {
     if (!activeWorkspace.value) return;
@@ -380,6 +422,7 @@ export const useAppStore = defineStore('app', () => {
     renameWorkspace,
     addNode, 
     setActiveNode, 
+    setNodeLayerMask,
     deleteNodeAndChildren,
     addReferenceImage,
     prependReferenceImage,

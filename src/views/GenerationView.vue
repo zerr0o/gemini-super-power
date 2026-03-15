@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { ref, nextTick, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { ChevronDown, ChevronUp, Type, Search, Loader2, Info, X, Upload, Image as ImageIcon, Star } from 'lucide-vue-next';
-import CanvasSelection, { type CropConfirmAction, type CropData } from '../components/CanvasSelection.vue';
+import { Brush, ChevronDown, ChevronUp, Eye, EyeOff, Type, Search, Loader2, Info, RotateCcw, Undo2, X, Upload, Image as ImageIcon, Star } from 'lucide-vue-next';
+import CanvasSelection, {
+  type CropConfirmAction,
+  type CropData,
+  type MaskEditableLayer,
+  type MaskEditorState,
+} from '../components/CanvasSelection.vue';
 import { useAppStore } from '../stores/appStore';
-import type { ImageDimensions, ReferenceImageAsset } from '../stores/appStore';
+import type { ImageDimensions, LayerMaskPayload, ReferenceImageAsset } from '../stores/appStore';
 import { generateImage, ASPECT_RATIO_VALUES, getSupportedAspectRatios, getSupportedResolutions } from '../services/geminiService';
 import type { GenerationParams, AspectRatio, Resolution, GenerationModel, ThinkingLevel } from '../services/geminiService';
 import { getImageDimensionsFromDataUrl, resolveNodeFinalImageSize } from '../services/imageDimensions';
-import { buildNodeLineage } from '../services/layerExport';
+import { buildBranchLayerStack, buildNodeLineage, type BranchLayerStack } from '../services/layerExport';
+import { renderLayerComposite } from '../services/layerRendering';
 import { buildPixelDensitySummary } from '../services/pixelDensity';
 
 const props = withDefaults(defineProps<{
@@ -38,20 +44,44 @@ const ALL_RESOLUTION_STEPS: { label: string; value: Resolution; px: number; flas
   { label: '4K', value: '4K', px: 4096 },
 ];
 
+const branchLayerStack = ref<BranchLayerStack | null>(null);
+const lineagePreviewImages = ref<Record<string, string>>({});
+const lineagePreviewThumbnails = ref<Record<string, string>>({});
+const activeSidebarTab = ref<'prompt' | 'mask'>('prompt');
+const isMaskEditorEnabled = ref(false);
+const selectedMaskLayerNodeId = ref<string | null>(null);
+const maskBrushMode = ref<'hide' | 'reveal'>('hide');
+const maskBrushRadius = ref(56);
+const maskBrushHardness = ref(0.72);
+const isMaskViewEnabled = ref(false);
+const maskEditorState = ref<MaskEditorState>({
+  canUndo: false,
+  hasMask: false,
+  isDirty: false,
+  targetNodeId: null,
+});
+
 const supportedAspectRatios = computed(() => getSupportedAspectRatios(model.value));
 const supportedResolutions = computed(() => getSupportedResolutions(model.value));
 const activeImageNode = computed(() => store.nodes.find(n => n.id === store.activeNodeId) || null);
 const activeLineageNodes = computed(() => buildNodeLineage(store.nodes, store.activeNodeId));
 const activeLineageCurrentIndex = computed(() => Math.max(0, activeLineageNodes.value.length - 1));
+const activeLineageMaskVersion = computed(() =>
+  activeLineageNodes.value.map(node => `${node.id}:${node.layerMask?.updatedAt ?? 0}`).join('|')
+);
+const displayedCanvasImageSrc = computed(() =>
+  branchLayerStack.value?.finalCompositeDataUrl || activeImageNode.value?.blobBase64 || ''
+);
 const primaryReference = computed(() => store.referenceImages[0] || null);
 const secondaryReferences = computed(() => store.referenceImages.slice(1));
 const hasExplicitPrimaryReference = computed(() => !!primaryReference.value);
 const canAddSecondaryReference = computed(() => store.referenceImages.length < 14);
 const implicitPrimaryReference = computed<ReferenceImageAsset | null>(() => {
   const activeNode = activeImageNode.value;
-  if (!activeNode?.blobBase64) return null;
+  const implicitImageSrc = displayedCanvasImageSrc.value;
+  if (!activeNode || !implicitImageSrc) return null;
 
-  return createReferenceAsset(activeNode.blobBase64, 'implicit-node', {
+  return createReferenceAsset(implicitImageSrc, 'implicit-node', {
     sourceUri: activeNode.sourceUri ?? null,
     sourceNodeId: activeNode.id,
   });
@@ -67,6 +97,14 @@ const previewLineageNode = computed(() => {
   if (previewLineageIndex.value === null) return null;
   return activeLineageNodes.value[previewLineageIndex.value] || null;
 });
+const previewLineageImageSrc = computed(() => {
+  const previewNode = previewLineageNode.value;
+  if (!previewNode) return null;
+
+  return lineagePreviewImages.value[previewNode.id]
+    || previewNode.finalResultBase64
+    || previewNode.blobBase64;
+});
 const previewLineageLabel = computed(() => {
   const previewNode = previewLineageNode.value;
   const previewIndex = previewLineageIndex.value;
@@ -79,6 +117,31 @@ const previewLineageLabel = computed(() => {
 const isShowingLineageTimeline = computed(() =>
   isShowingParentPreview.value && activeLineageNodes.value.length > 1
 );
+const workspaceName = computed(() => store.activeWorkspace?.name || 'workspace');
+const editableMaskLayers = computed<MaskEditableLayer[]>(() =>
+  (branchLayerStack.value?.layers ?? []).map(layer => ({
+    nodeId: layer.nodeId,
+    left: layer.left,
+    top: layer.top,
+    width: layer.width,
+    height: layer.height,
+    sourceDataUrl: layer.sourceDataUrl,
+    layerMask: layer.layerMask ?? null,
+  }))
+);
+const availableMaskLayers = computed(() =>
+  branchLayerStack.value ? [...branchLayerStack.value.layers].reverse() : []
+);
+const selectedMaskLayer = computed(() =>
+  branchLayerStack.value?.layers.find(layer => layer.nodeId === selectedMaskLayerNodeId.value) || null
+);
+const canEditMasks = computed(() => availableMaskLayers.value.length > 0);
+const selectedMaskLayerLabel = computed(() => {
+  const layer = selectedMaskLayer.value;
+  if (!layer) return 'No layer selected';
+  if (layer.index === 0) return 'Root layer';
+  return `${layer.name} · ${layer.width}x${layer.height}`;
+});
 
 function normalizeAspectRatioForModel(value: AspectRatio, currentModel: GenerationModel): AspectRatio {
   const supported = getSupportedAspectRatios(currentModel);
@@ -196,8 +259,68 @@ function formatOpacity(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
-function getNodePreviewImage(node: { finalResultThumbnailBase64?: string | null; finalResultBase64?: string | null; blobBase64: string }) {
-  return node.finalResultThumbnailBase64 || node.finalResultBase64 || node.blobBase64;
+function formatMaskLayerOption(layer: BranchLayerStack['layers'][number]) {
+  const promptLabel = layer.prompt?.trim() || (layer.index === 0 ? 'Base Image' : 'Untitled layer');
+  return `#${layer.index + 1} · ${promptLabel}`;
+}
+
+function syncSelectedMaskLayer() {
+  const stack = branchLayerStack.value;
+  if (!stack || stack.layers.length === 0) {
+    selectedMaskLayerNodeId.value = null;
+    return;
+  }
+
+  if (selectedMaskLayerNodeId.value && stack.layers.some(layer => layer.nodeId === selectedMaskLayerNodeId.value)) {
+    return;
+  }
+
+  selectedMaskLayerNodeId.value = stack.layers[stack.layers.length - 1].nodeId;
+}
+
+function setSidebarTab(nextTab: 'prompt' | 'mask') {
+  activeSidebarTab.value = nextTab;
+  if (nextTab !== 'mask' && isMaskEditorEnabled.value) {
+    setMaskEditorEnabled(false);
+  }
+}
+
+function setMaskEditorEnabled(nextValue: boolean) {
+  isMaskEditorEnabled.value = nextValue;
+  if (!nextValue) {
+    isMaskViewEnabled.value = false;
+    return;
+  }
+
+  activeSidebarTab.value = 'mask';
+  canvasRef.value?.cancelCrop?.();
+  resetTransientSelectionState();
+}
+
+function handleMaskUpdated(payload: { nodeId: string; mask: LayerMaskPayload | null }) {
+  store.setNodeLayerMask(payload.nodeId, payload.mask);
+}
+
+function handleMaskStateChange(state: MaskEditorState) {
+  maskEditorState.value = state;
+}
+
+function undoMaskStroke() {
+  canvasRef.value?.undoMaskStroke?.();
+}
+
+function resetSelectedMask() {
+  canvasRef.value?.resetMaskStroke?.();
+}
+
+function getNodePreviewImage(
+  node: { id: string; finalResultThumbnailBase64?: string | null; finalResultBase64?: string | null; blobBase64: string },
+) {
+  return lineagePreviewThumbnails.value[node.id]
+    || lineagePreviewImages.value[node.id]
+    || node.finalResultThumbnailBase64
+    || node.finalResultBase64
+    || node.blobBase64;
 }
 
 function getLineageNodeRole(index: number) {
@@ -344,6 +467,94 @@ watch(
   () => [
     store.activeNodeId,
     store.nodes.length,
+    activeLineageMaskVersion.value,
+  ],
+  async (_state, _previousState, onCleanup) => {
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+
+    if (!store.activeNodeId) {
+      branchLayerStack.value = null;
+      selectedMaskLayerNodeId.value = null;
+      return;
+    }
+
+    try {
+      const nextStack = await buildBranchLayerStack(store.nodes, store.activeNodeId, workspaceName.value);
+      if (!cancelled) {
+        branchLayerStack.value = nextStack;
+        syncSelectedMaskLayer();
+      }
+    } catch {
+      if (!cancelled) {
+        branchLayerStack.value = null;
+        selectedMaskLayerNodeId.value = null;
+      }
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [
+    branchLayerStack.value?.activeNodeId ?? null,
+    branchLayerStack.value?.documentWidth ?? 0,
+    branchLayerStack.value?.documentHeight ?? 0,
+    branchLayerStack.value?.layers.map(layer => `${layer.nodeId}:${layer.layerMask?.updatedAt ?? 0}`).join('|') ?? '',
+  ],
+  async (_state, _previousState, onCleanup) => {
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+    });
+
+    const stack = branchLayerStack.value;
+    if (!stack) {
+      lineagePreviewImages.value = {};
+      lineagePreviewThumbnails.value = {};
+      return;
+    }
+
+    try {
+      const imageEntries: Array<[string, string]> = [];
+      const thumbnailEntries: Array<[string, string]> = [];
+
+      for (let index = 0; index < stack.layers.length; index += 1) {
+        const layer = stack.layers[index];
+        const compositeDataUrl = index === stack.layers.length - 1
+          ? stack.finalCompositeDataUrl
+          : (await renderLayerComposite(
+              stack.layers.slice(0, index + 1),
+              stack.documentWidth,
+              stack.documentHeight,
+            )).toDataURL('image/png');
+
+        if (cancelled) return;
+
+        imageEntries.push([layer.nodeId, compositeDataUrl]);
+        thumbnailEntries.push([layer.nodeId, await createThumbnailDataUrl(compositeDataUrl)]);
+      }
+
+      if (!cancelled) {
+        lineagePreviewImages.value = Object.fromEntries(imageEntries);
+        lineagePreviewThumbnails.value = Object.fromEntries(thumbnailEntries);
+      }
+    } catch {
+      if (!cancelled) {
+        lineagePreviewImages.value = {};
+        lineagePreviewThumbnails.value = {};
+      }
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [
+    store.activeNodeId,
+    store.nodes.length,
   ],
   async (_state, _previousState, onCleanup) => {
     let cancelled = false;
@@ -438,8 +649,9 @@ async function onGenerate() {
 
   try {
     const activeNode = activeImageNode.value;
-    const generationReferences: ReferenceImageAsset[] = store.referenceImages.length === 0 && activeNode?.blobBase64
-      ? [createReferenceAsset(activeNode.blobBase64, 'implicit-node', {
+    const generationBaseImage = displayedCanvasImageSrc.value || activeNode?.blobBase64 || null;
+    const generationReferences: ReferenceImageAsset[] = store.referenceImages.length === 0 && activeNode && generationBaseImage
+      ? [createReferenceAsset(generationBaseImage, 'implicit-node', {
           sourceUri: activeNode.sourceUri ?? null,
           sourceNodeId: activeNode.id,
         })]
@@ -483,7 +695,7 @@ async function onGenerate() {
     const generationWorkspaceId = store.activeWorkspaceId;
     const generationParentId = store.activeNodeId;
     const generationCropData = activeCropData.value;
-    const generationBaseNodeBlob = activeImageNode.value?.blobBase64;
+    const generationBaseNodeBlob = generationBaseImage;
 
     const resultBase64 = await generateImage(params);
     const generatedImageSize = await getImageDimensionsFromDataUrl(resultBase64);
@@ -602,6 +814,15 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
   const isSpace = e.code === 'Space' || e.key === ' ';
   const isArrowUp = e.key === 'ArrowUp';
   const isArrowDown = e.key === 'ArrowDown';
+  const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && key === 'z';
+
+  if (isUndo && isMaskEditorEnabled.value && !isTypingTarget(e.target)) {
+    if (maskEditorState.value.canUndo) {
+      e.preventDefault();
+      undoMaskStroke();
+    }
+    return;
+  }
 
   if (key === 'a') {
     if (!canUseParentShortcut(e.target)) return;
@@ -673,10 +894,25 @@ watch(() => props.isShortcutSuspended, (isShortcutSuspended) => {
   }
 });
 
+watch(canEditMasks, (nextValue) => {
+  if (!nextValue) {
+    activeSidebarTab.value = 'prompt';
+    setMaskEditorEnabled(false);
+  } else {
+    syncSelectedMaskLayer();
+  }
+});
+
 watch(() => store.activeNodeId, () => {
   resetTransientSelectionState();
   resetParentPreviewState();
   canvasView.value = { zoom: 1, zoomPercent: 100, canPan: false };
+  maskEditorState.value = {
+    canUndo: false,
+    hasMask: false,
+    isDirty: false,
+    targetNodeId: null,
+  };
 });
 </script>
 
@@ -787,15 +1023,26 @@ watch(() => store.activeNodeId, () => {
           <CanvasSelection
             :key="activeImageNode.id"
             ref="canvasRef"
-            :imageSrc="activeImageNode.blobBase64"
-            :preview-src="isShowingParentPreview && previewLineageNode && previewLineageNode.id !== activeImageNode?.id ? previewLineageNode.blobBase64 : null"
-            :overlay-src="!isShowingParentPreview && isDensityOverlayEnabled ? densityOverlaySrc : null"
+            :imageSrc="displayedCanvasImageSrc"
+            :preview-src="isShowingParentPreview && previewLineageNode && previewLineageNode.id !== activeImageNode?.id ? previewLineageImageSrc : null"
+            :overlay-src="!isShowingParentPreview && !isMaskEditorEnabled && isDensityOverlayEnabled ? densityOverlaySrc : null"
             :overlay-opacity="densityOverlayOpacity"
             :targetRatio="isAutoRatio ? 'auto' : aspectRatio"
             :availableRatios="supportedAspectRatios"
             :has-explicit-primary-reference="hasExplicitPrimaryReference"
             :can-add-secondary-reference="canAddSecondaryReference"
+            :live-layers="editableMaskLayers"
+            :live-document-width="branchLayerStack?.documentWidth || null"
+            :live-document-height="branchLayerStack?.documentHeight || null"
+            :mask-edit-enabled="isMaskEditorEnabled"
+            :mask-target-node-id="selectedMaskLayerNodeId"
+            :mask-brush-radius="maskBrushRadius"
+            :mask-brush-hardness="maskBrushHardness"
+            :mask-brush-mode="maskBrushMode"
+            :mask-view-enabled="isMaskViewEnabled"
             @cropped="handleCrop"
+            @mask-updated="handleMaskUpdated"
+            @mask-state-change="handleMaskStateChange"
             @update:ratio="r => aspectRatio = r"
             @update:selection-px="handleSelectionPx"
             @update:view="handleCanvasView" />
@@ -888,12 +1135,39 @@ watch(() => store.activeNodeId, () => {
         class="float-right font-bold ml-2 cursor-pointer text-red-100 hover:text-white">&times;</button>
     </div>
 
-    <div class="p-4 border-b border-border font-medium text-sm flex items-center gap-2">
-      <Type :size="16" class="text-primary" /> Prompt Engine
+    <div class="px-4 pt-4 border-b border-border bg-background/35">
+      <div
+        role="tablist"
+        aria-label="Generation sidebar sections"
+        class="flex items-end gap-1.5">
+        <button
+          role="tab"
+          :aria-selected="activeSidebarTab === 'prompt'"
+          class="rounded-t-xl border border-b-0 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-2 -mb-px"
+          :class="activeSidebarTab === 'prompt'
+            ? 'bg-surface border-border text-textMain shadow-[0_-1px_0_rgba(250,204,21,0.22)_inset]'
+            : 'border-transparent text-textMuted hover:text-primary hover:bg-surfaceHover/40'"
+          @click="setSidebarTab('prompt')">
+          <Type :size="15" :class="activeSidebarTab === 'prompt' ? 'text-primary' : ''" />
+          Prompt Engine
+        </button>
+        <button
+          role="tab"
+          :aria-selected="activeSidebarTab === 'mask'"
+          class="rounded-t-xl border border-b-0 px-4 py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-2 -mb-px disabled:opacity-40 disabled:cursor-not-allowed"
+          :class="activeSidebarTab === 'mask'
+            ? 'bg-surface border-border text-textMain shadow-[0_-1px_0_rgba(250,204,21,0.22)_inset]'
+            : 'border-transparent text-textMuted hover:text-primary hover:bg-surfaceHover/40'"
+          :disabled="!canEditMasks"
+          @click="setSidebarTab('mask')">
+          <Brush :size="15" :class="activeSidebarTab === 'mask' ? 'text-primary' : ''" />
+          Layer Mask
+        </button>
+      </div>
     </div>
 
     <div class="p-4 flex flex-col gap-4 flex-1 overflow-y-auto">
-      <div class="flex flex-col gap-2">
+      <div v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2">
         <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Models</label>
         <select
           v-model="model"
@@ -903,7 +1177,7 @@ watch(() => store.activeNodeId, () => {
         </select>
       </div>
 
-      <div class="flex flex-col gap-2">
+      <div v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2">
         <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Aspect Ratio</label>
         <div class="grid grid-cols-5 gap-1">
           <button
@@ -919,7 +1193,7 @@ watch(() => store.activeNodeId, () => {
         </div>
       </div>
 
-      <div class="flex flex-col gap-2">
+      <div v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2">
         <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Resolution</label>
         <div class="grid grid-cols-5 gap-1">
           <button
@@ -935,7 +1209,7 @@ watch(() => store.activeNodeId, () => {
         </div>
       </div>
 
-      <div v-if="model === 'gemini-3.1-flash-image-preview'" class="flex flex-col gap-2">
+      <div v-show="activeSidebarTab === 'prompt' && model === 'gemini-3.1-flash-image-preview'" class="flex flex-col gap-2">
         <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Thinking Level</label>
         <div class="grid grid-cols-2 gap-1">
           <button
@@ -949,7 +1223,7 @@ watch(() => store.activeNodeId, () => {
         </div>
       </div>
 
-      <div class="flex flex-col gap-2">
+      <div v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2">
         <div class="flex items-center justify-between">
           <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Reference Limits ({{ store.referenceImages.length }}/14)</label>
           <button
@@ -1037,7 +1311,152 @@ watch(() => store.activeNodeId, () => {
         </div>
       </div>
 
-      <div class="flex flex-col gap-2 mt-4 flex-1">
+      <div v-show="activeSidebarTab === 'mask'" class="flex flex-col gap-2">
+        <div class="flex items-center justify-between gap-2">
+          <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Layer Mask</label>
+          <button
+            @click="setMaskEditorEnabled(!isMaskEditorEnabled)"
+            :disabled="!canEditMasks"
+            class="px-2.5 py-1 rounded-full border text-[11px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            :class="isMaskEditorEnabled
+              ? 'border-primary bg-primary text-[#000] font-semibold'
+              : 'border-border text-textMuted hover:border-primary hover:text-primary'">
+            {{ isMaskEditorEnabled ? 'On' : 'Off' }}
+          </button>
+        </div>
+
+        <div class="rounded-xl border border-border bg-background/50 p-3 flex flex-col gap-3">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-[11px] uppercase tracking-[0.2em] text-textMuted">Live Brush</p>
+              <p class="mt-1 text-xs text-textMuted/80">
+                Paint directly on the generation canvas. <span class="text-textMain">Ctrl+drag</span> pans and <span class="text-textMain">Ctrl+Z</span> undoes the last stroke.
+              </p>
+            </div>
+            <Brush :size="16" :class="isMaskEditorEnabled ? 'text-primary' : 'text-textMuted/50'" />
+          </div>
+
+          <div class="rounded-xl border border-white/8 bg-surface/40 p-3 flex flex-col gap-3">
+            <div class="flex items-center justify-between text-[11px] text-textMuted">
+              <span>Branch Layers</span>
+              <span>{{ branchLayerStack ? `${branchLayerStack.layers.length} total` : '0 total' }}</span>
+            </div>
+
+            <select
+              v-model="selectedMaskLayerNodeId"
+              :disabled="!canEditMasks"
+              class="bg-background border border-border rounded p-2 text-sm focus:outline-none focus:border-primary disabled:opacity-40 disabled:cursor-not-allowed">
+              <option v-if="!availableMaskLayers.length" :value="null">No layer available</option>
+              <option
+                v-for="layer in availableMaskLayers"
+                :key="layer.nodeId"
+                :value="layer.nodeId">
+                {{ formatMaskLayerOption(layer) }}
+              </option>
+            </select>
+
+            <div class="text-[11px] text-textMuted/80 rounded-lg border border-white/8 bg-background/60 px-3 py-2">
+              {{ selectedMaskLayerLabel }}
+            </div>
+
+            <div class="inline-flex rounded-xl border border-border overflow-hidden">
+              <button
+                class="px-3 py-1.5 text-xs transition-colors"
+                :class="maskBrushMode === 'hide' ? 'bg-primary text-[#000] font-semibold' : 'bg-background text-textMuted hover:text-primary'"
+                :disabled="!isMaskEditorEnabled"
+                @click="maskBrushMode = 'hide'">
+                Hide
+              </button>
+              <button
+                class="px-3 py-1.5 text-xs transition-colors"
+                :class="maskBrushMode === 'reveal' ? 'bg-primary text-[#000] font-semibold' : 'bg-background text-textMuted hover:text-primary'"
+                :disabled="!isMaskEditorEnabled"
+                @click="maskBrushMode = 'reveal'">
+                Reveal
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3">
+              <div class="rounded-xl border border-white/8 bg-background/60 p-3">
+                <div class="flex items-center justify-between text-[11px] text-textMuted">
+                  <span>Brush Radius</span>
+                  <span>{{ maskBrushRadius }} px</span>
+                </div>
+                <input
+                  v-model.number="maskBrushRadius"
+                  type="range"
+                  min="4"
+                  max="256"
+                  step="1"
+                  class="w-full mt-2 accent-yellow-400 disabled:opacity-40"
+                  :disabled="!isMaskEditorEnabled" />
+              </div>
+
+              <div class="rounded-xl border border-white/8 bg-background/60 p-3">
+                <div class="flex items-center justify-between text-[11px] text-textMuted">
+                  <span>Brush Hardness</span>
+                  <span>{{ Math.round(maskBrushHardness * 100) }}%</span>
+                </div>
+                <input
+                  v-model.number="maskBrushHardness"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  class="w-full mt-2 accent-yellow-400 disabled:opacity-40"
+                  :disabled="!isMaskEditorEnabled" />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2">
+              <button
+                class="px-2.5 py-2 rounded-xl border text-xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                :class="isMaskViewEnabled
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border text-textMuted hover:border-primary hover:text-primary'"
+                :disabled="!isMaskEditorEnabled"
+                @click="isMaskViewEnabled = !isMaskViewEnabled">
+                <Eye v-if="isMaskViewEnabled" :size="13" />
+                <EyeOff v-else :size="13" />
+                {{ isMaskViewEnabled ? 'Mask View' : 'Live View' }}
+              </button>
+
+              <button
+                class="px-2.5 py-2 rounded-xl border text-xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                :class="maskEditorState.canUndo
+                  ? 'border-border text-textMuted hover:border-primary hover:text-primary'
+                  : 'border-border text-textMuted/60'"
+                :disabled="!isMaskEditorEnabled || !maskEditorState.canUndo"
+                @click="undoMaskStroke">
+                <Undo2 :size="13" />
+                Undo
+              </button>
+
+              <button
+                class="px-2.5 py-2 rounded-xl border text-xs transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                :class="isMaskEditorEnabled
+                  ? 'border-border text-textMuted hover:border-primary hover:text-primary'
+                  : 'border-border text-textMuted/60'"
+                :disabled="!isMaskEditorEnabled || !selectedMaskLayer"
+                @click="resetSelectedMask">
+                <RotateCcw :size="13" />
+                Reset
+              </button>
+            </div>
+
+            <div class="flex items-center justify-between text-[11px]">
+              <span :class="maskEditorState.hasMask ? 'text-primary' : 'text-textMuted/70'">
+                {{ maskEditorState.hasMask ? 'Mask active on this layer' : 'No saved mask on this layer' }}
+              </span>
+              <span :class="isMaskEditorEnabled ? 'text-textMuted' : 'text-textMuted/60'">
+                {{ isMaskEditorEnabled ? 'Canvas brush armed' : 'Canvas brush idle' }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2 mt-4 flex-1">
         <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Prompt</label>
         <textarea
           v-model="prompt"
