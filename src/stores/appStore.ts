@@ -325,6 +325,12 @@ export const useAppStore = defineStore('app', () => {
     saveToIdb();
   }
 
+  function clearReferenceImages() {
+    if (!activeWorkspace.value) return;
+    activeWorkspace.value.referenceImages = [];
+    saveToIdb();
+  }
+
   return { 
     workspaces, 
     activeWorkspaceId, 
@@ -344,6 +350,7 @@ export const useAppStore = defineStore('app', () => {
     deleteNodeAndChildren,
     addReferenceImage,
     prependReferenceImage,
-    removeReferenceImage 
+    removeReferenceImage,
+    clearReferenceImages 
   };
 });
