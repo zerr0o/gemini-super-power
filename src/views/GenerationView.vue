@@ -1136,7 +1136,7 @@ watch(() => store.activeNodeId, () => {
             v-if="isShowingLineageTimeline"
             class="absolute left-4 top-1/2 -translate-y-1/2 z-30 w-[132px] max-h-[calc(100%-3rem)] rounded-2xl border border-border bg-surface/88 backdrop-blur-md shadow-xl p-3">
             <div class="absolute left-[29px] top-10 bottom-5 w-px bg-gradient-to-b from-primary/40 via-border to-primary/20 pointer-events-none"></div>
-            <div class="timeline-scroll relative flex flex-col gap-3 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
+            <div class="relative flex flex-col gap-3 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
               <button
                 v-for="(node, index) in activeLineageNodes"
                 :key="node.id"
@@ -1210,7 +1210,9 @@ watch(() => store.activeNodeId, () => {
             @mask-state-change="handleMaskStateChange"
             @update:ratio="r => aspectRatio = r"
             @update:selection-px="handleSelectionPx"
-            @update:view="handleCanvasView" />
+            @update:view="handleCanvasView"
+            @update:brush-radius="r => maskBrushRadius = r"
+            @update:brush-hardness="h => maskBrushHardness = h" />
 
           <div
             v-show="!isMaskEditorEnabled"
@@ -1460,7 +1462,7 @@ watch(() => store.activeNodeId, () => {
             </p>
           </div>
 
-          <div v-if="secondaryReferences.length > 0" class="flex gap-2 overflow-x-auto pb-2 custom-scroll">
+          <div v-if="secondaryReferences.length > 0" class="flex gap-2 overflow-x-auto pb-2">
             <div
               v-for="(img, idx) in secondaryReferences"
               :key="img.id"
@@ -1669,45 +1671,6 @@ watch(() => store.activeNodeId, () => {
 </template>
 
 <style>
-.custom-scroll::-webkit-scrollbar {
-  height: 4px;
-}
-
-.custom-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-}
-
-.custom-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.timeline-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(250, 204, 21, 0.45) transparent;
-}
-
-.timeline-scroll::-webkit-scrollbar {
-  width: 6px;
-}
-
-.timeline-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.timeline-scroll::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(250, 204, 21, 0.72), rgba(245, 158, 11, 0.32));
-  border-radius: 999px;
-}
-
-.timeline-scroll::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(253, 224, 71, 0.84), rgba(249, 115, 22, 0.46));
-}
-
 .fade-enter-active { transition: opacity 0.15s ease; }
 .fade-leave-active { transition: opacity 0.25s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }

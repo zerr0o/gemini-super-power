@@ -169,7 +169,7 @@ async function exportPsd() {
 </script>
 
 <template>
-  <div class="node-inspector-scroll w-full h-full min-h-0 overflow-y-auto pr-2 pb-8 flex flex-col gap-6 max-w-6xl mx-auto pt-8">
+  <div class="w-full h-full min-h-0 overflow-y-auto pr-2 pb-8 flex flex-col gap-6 max-w-6xl mx-auto pt-8">
     <div class="flex items-end justify-between gap-6 border-b border-border pb-4">
       <div>
         <h2 class="text-2xl font-semibold text-textMain">Node Inspector</h2>
@@ -423,28 +423,3 @@ async function exportPsd() {
   </div>
 </template>
 
-<style scoped>
-.node-inspector-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(250, 204, 21, 0.68) rgba(255, 255, 255, 0.05);
-}
-
-.node-inspector-scroll::-webkit-scrollbar {
-  width: 10px;
-}
-
-.node-inspector-scroll::-webkit-scrollbar-track {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
-  border-radius: 999px;
-}
-
-.node-inspector-scroll::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(250, 204, 21, 0.88), rgba(245, 158, 11, 0.62));
-  border: 2px solid rgba(12, 12, 12, 0.72);
-  border-radius: 999px;
-}
-
-.node-inspector-scroll::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(253, 224, 71, 0.96), rgba(249, 115, 22, 0.72));
-}
-</style>

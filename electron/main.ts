@@ -269,12 +269,19 @@ function createWindow() {
     title: 'Gemini Super Power',
     icon: path.join(process.env.VITE_PUBLIC, 'icon.png'),
     autoHideMenuBar: true,
+    width: 1440,
+    height: 900,
+    minWidth: 960,
+    minHeight: 600,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
     },
   })
 
   win.setMenuBarVisibility(false)
+  win.maximize()
+  win.show()
 
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {

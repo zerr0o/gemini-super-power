@@ -6,7 +6,7 @@ import HistoryGraph from './components/HistoryGraph.vue';
 import NodeInspector from './components/NodeInspector.vue';
 import LayerMaskWorkspace from './components/LayerMaskWorkspace.vue';
 import { useAppStore } from './stores/appStore';
-import { buildBranchLayerStack } from './services/layerExport';
+import { buildBranchLayerStack, buildBranchPsdExport, buildLayerExportBundle, saveBranchPsdExport, saveLayerExportBundle } from './services/layerExport';
 
 type AppTab = 'generation' | 'history' | 'tools' | 'masks' | 'settings';
 
@@ -156,6 +156,35 @@ async function exportActiveNodePng() {
    }, 1800);
 }
 
+const psdExportState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
+const layerExportState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+async function exportPsd() {
+   if (!activeImageNode.value) return;
+   psdExportState.value = 'saving';
+   try {
+      const psd = await buildBranchPsdExport(store.nodes, store.activeNodeId, store.activeWorkspace?.name || 'workspace');
+      await saveBranchPsdExport(psd);
+      psdExportState.value = 'saved';
+   } catch {
+      psdExportState.value = 'error';
+   }
+   setTimeout(() => { psdExportState.value = 'idle'; }, 1800);
+}
+
+async function exportLayerPackage() {
+   if (!activeImageNode.value) return;
+   layerExportState.value = 'saving';
+   try {
+      const bundle = await buildLayerExportBundle(store.nodes, store.activeNodeId, store.activeWorkspace?.name || 'workspace');
+      await saveLayerExportBundle(bundle);
+      layerExportState.value = 'saved';
+   } catch {
+      layerExportState.value = 'error';
+   }
+   setTimeout(() => { layerExportState.value = 'idle'; }, 1800);
+}
+
 function handleRenameWorkspace() {
    if (!store.activeWorkspaceId) return;
    const currentName = store.workspaces.find(w => w.id === store.activeWorkspaceId)?.name || '';
@@ -235,6 +264,20 @@ onMounted(() => {
 
 <template>
    <div class="h-screen w-screen flex flex-col bg-background text-textMain overflow-hidden relative">
+
+      <Transition name="splash-fade">
+        <div
+          v-if="!store.isHydrated"
+          class="fixed inset-0 z-[2000] bg-background flex flex-col items-center justify-center gap-6 select-none">
+          <h1 class="text-4xl font-black tracking-[0.25em] uppercase">
+            <span class="text-white">GEMINI</span>
+            <span class="text-primary ml-2">SUPER POWER</span>
+          </h1>
+          <div class="splash-spinner"></div>
+          <p class="text-xs text-textMuted tracking-widest uppercase animate-pulse">Loading workspace...</p>
+        </div>
+      </Transition>
+
       <header
          class="h-10 bg-surface border-b border-border flex items-center justify-between px-4 app-region-drag select-none shrink-0">
          <div class="flex items-center gap-4">
@@ -270,7 +313,7 @@ onMounted(() => {
             </div>
          </div>
 
-         <div class="flex items-center gap-2 app-region-no-drag">
+         <div class="flex items-center gap-1.5 app-region-no-drag">
             <button
                class="h-7 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.16em] transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-default"
                :class="quickExportState === 'saved'
@@ -283,7 +326,37 @@ onMounted(() => {
                title="Export the active image as a PNG">
                <Check v-if="quickExportState === 'saved'" :size="12" />
                <Download v-else :size="12" />
-               {{ quickExportState === 'saving' ? 'Exporting' : quickExportState === 'saved' ? 'Saved' : quickExportState === 'error' ? 'Retry' : 'Export PNG' }}
+               {{ quickExportState === 'saving' ? 'Exporting' : quickExportState === 'saved' ? 'Saved' : quickExportState === 'error' ? 'Retry' : 'PNG' }}
+            </button>
+            <button
+               class="h-7 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.16em] transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-default"
+               :class="psdExportState === 'saved'
+                  ? 'border-green-400/40 bg-green-400/15 text-green-300'
+                  : psdExportState === 'error'
+                     ? 'border-red-400/40 bg-red-400/15 text-red-300'
+                     : 'border-border text-textMuted hover:bg-primary/10 hover:text-primary'"
+               :disabled="!activeImageNode || psdExportState === 'saving'"
+               @click="exportPsd"
+               title="Export as layered PSD">
+               <Check v-if="psdExportState === 'saved'" :size="12" />
+               <Loader2 v-else-if="psdExportState === 'saving'" :size="12" class="animate-spin" />
+               <Layers v-else :size="12" />
+               {{ psdExportState === 'saving' ? '...' : psdExportState === 'saved' ? 'Saved' : psdExportState === 'error' ? 'Retry' : 'PSD' }}
+            </button>
+            <button
+               class="h-7 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.16em] transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-default"
+               :class="layerExportState === 'saved'
+                  ? 'border-green-400/40 bg-green-400/15 text-green-300'
+                  : layerExportState === 'error'
+                     ? 'border-red-400/40 bg-red-400/15 text-red-300'
+                     : 'border-border text-textMuted hover:bg-primary/10 hover:text-primary'"
+               :disabled="!activeImageNode || layerExportState === 'saving'"
+               @click="exportLayerPackage"
+               title="Export layer package folder">
+               <Check v-if="layerExportState === 'saved'" :size="12" />
+               <Loader2 v-else-if="layerExportState === 'saving'" :size="12" class="animate-spin" />
+               <FolderOpen v-else :size="12" />
+               {{ layerExportState === 'saving' ? '...' : layerExportState === 'saved' ? 'Saved' : layerExportState === 'error' ? 'Retry' : 'Layers' }}
             </button>
          </div>
       </header>
@@ -545,4 +618,21 @@ onMounted(() => {
 .tab-fade-leave-active { transition: opacity 0.08s ease; }
 .tab-fade-enter-from { opacity: 0; transform: translateY(6px); }
 .tab-fade-leave-to { opacity: 0; }
+
+.splash-fade-leave-active { transition: opacity 0.4s ease; }
+.splash-fade-leave-to { opacity: 0; }
+
+.splash-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(250, 204, 21, 0.15);
+  border-top-color: rgba(250, 204, 21, 0.7);
+  border-radius: 50%;
+  animation: splash-spin 0.8s linear infinite;
+  will-change: transform;
+}
+
+@keyframes splash-spin {
+  to { transform: rotate(360deg); }
+}
 </style>

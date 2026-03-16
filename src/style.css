@@ -21,4 +21,37 @@
     -webkit-font-smoothing: antialiased;
     user-select: none;
   }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(250, 204, 21, 0.55) rgba(255, 255, 255, 0.04);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(250, 204, 21, 0.72), rgba(245, 158, 11, 0.42));
+    border: 2px solid rgba(10, 10, 10, 0.6);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(253, 224, 71, 0.9), rgba(249, 115, 22, 0.6));
+  }
+
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }

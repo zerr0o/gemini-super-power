@@ -86,6 +86,8 @@ const emit = defineEmits<{
   (e: 'update:view', state: CanvasViewState): void;
   (e: 'mask-updated', payload: { nodeId: string; mask: LayerMaskPayload | null }): void;
   (e: 'mask-state-change', state: MaskEditorState): void;
+  (e: 'update:brushRadius', radius: number): void;
+  (e: 'update:brushHardness', hardness: number): void;
 }>();
 
 const MIN_ZOOM = 1;
@@ -107,6 +109,10 @@ const panOffset = ref({ x: 0, y: 0 });
 const naturalSize = ref({ width: 0, height: 0 });
 const containerSize = ref({ width: 0, height: 0 });
 const isMaskPainting = ref(false);
+const isBrushResizing = ref(false);
+const brushResizeStart = ref({ x: 0, y: 0 });
+const brushResizeInitial = ref({ radius: 56, hardness: 0.72 });
+const brushResizePreview = ref<{ x: number; y: number } | null>(null);
 const maskCanvas = ref<HTMLCanvasElement | null>(null);
 const alphaMaskCanvas = ref<HTMLCanvasElement | null>(null);
 const hasDirtyMask = ref(false);
@@ -501,10 +507,40 @@ function resetView() {
 
 function drawMaskCursor(ctx: CanvasRenderingContext2D) {
   const pointer = maskPointerPreview.value;
-  if (!pointer?.inside || !renderBox.value || !selectedMaskLayer.value) return;
+  if (!renderBox.value || !selectedMaskLayer.value) return;
 
   const dpr = window.devicePixelRatio || 1;
   const docScale = (renderBox.value.w * dpr) / Math.max(1, naturalSize.value.width);
+
+  if (isBrushResizing.value && brushResizePreview.value) {
+    const px = brushResizePreview.value.x * dpr;
+    const py = brushResizePreview.value.y * dpr;
+    const outerR = props.maskBrushRadius * docScale;
+    const innerR = outerR * Math.min(0.99, Math.max(0, props.maskBrushHardness));
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(px, py, outerR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 80, 80, 0.18)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(px, py, innerR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 80, 80, 0.28)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(px, py, outerR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 110, 110, 0.9)';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.setLineDash([]);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  if (!pointer?.inside) return;
+
   const cursorRadius = props.maskBrushRadius * docScale;
   ctx.save();
   ctx.beginPath();
@@ -792,6 +828,18 @@ function startPan(e: MouseEvent) {
 function handleMouseDown(e: MouseEvent) {
   if (!renderBox.value) return;
 
+  if (e.button === 2 && props.maskEditEnabled && selectedMaskLayer.value) {
+    e.preventDefault();
+    const point = getLocalPoint(e.clientX, e.clientY);
+    if (!point) return;
+    isBrushResizing.value = true;
+    brushResizeStart.value = { x: e.clientX, y: e.clientY };
+    brushResizeInitial.value = { radius: props.maskBrushRadius, hardness: props.maskBrushHardness };
+    brushResizePreview.value = { x: point.x, y: point.y };
+    scheduleLiveCompositeRender();
+    return;
+  }
+
   if (e.ctrlKey && canPan.value) {
     startPan(e);
     return;
@@ -834,6 +882,17 @@ function startResize(corner: string, e: MouseEvent) {
 }
 
 function handleMouseMove(e: MouseEvent) {
+  if (isBrushResizing.value) {
+    const dx = e.clientX - brushResizeStart.value.x;
+    const dy = e.clientY - brushResizeStart.value.y;
+    const newRadius = Math.max(4, Math.min(300, Math.round(brushResizeInitial.value.radius - dy * 0.5)));
+    const newHardness = Math.max(0, Math.min(0.99, brushResizeInitial.value.hardness + dx * 0.003));
+    emit('update:brushRadius', newRadius);
+    emit('update:brushHardness', Math.round(newHardness * 100) / 100);
+    scheduleLiveCompositeRender();
+    return;
+  }
+
   if (mode.value === 'pan') {
     panOffset.value = clampPan({
       x: initialPan.value.x + (e.clientX - startPos.value.x),
@@ -898,6 +957,13 @@ function handleMouseLeave() {
 }
 
 async function handleMouseUp() {
+  if (isBrushResizing.value) {
+    isBrushResizing.value = false;
+    brushResizePreview.value = null;
+    scheduleLiveCompositeRender();
+    return;
+  }
+
   if (isMaskPainting.value) {
     isMaskPainting.value = false;
     lastMaskPoint = null;
@@ -1298,7 +1364,8 @@ defineExpose({
     @mouseup.prevent="handleMouseUp"
     @mouseleave.prevent="handleMouseLeave(); handleMouseUp()"
     @dblclick.prevent="selectAll"
-    @wheel.prevent="handleWheel">
+    @wheel.prevent="handleWheel"
+    @contextmenu.prevent>
 
     <img
       ref="imageRef"
