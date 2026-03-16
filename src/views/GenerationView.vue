@@ -55,6 +55,7 @@ const maskBrushMode = ref<'hide' | 'reveal'>('hide');
 const maskBrushRadius = ref(56);
 const maskBrushHardness = ref(0.72);
 const isMaskViewEnabled = ref(false);
+const isMaskBorderVisible = ref(false);
 const maskEditorState = ref<MaskEditorState>({
   canUndo: false,
   hasMask: false,
@@ -935,6 +936,23 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
   }
 
   if (
+    key === 'b'
+    && !e.ctrlKey
+    && !e.metaKey
+    && !e.altKey
+    && !e.repeat
+    && props.isActive
+    && !props.isShortcutSuspended
+    && activeSidebarTab.value === 'mask'
+    && isMaskEditorEnabled.value
+    && !isTypingTarget(e.target)
+  ) {
+    e.preventDefault();
+    isMaskBorderVisible.value = !isMaskBorderVisible.value;
+    return;
+  }
+
+  if (
     key === 'l'
     && !e.ctrlKey
     && !e.metaKey
@@ -1055,7 +1073,7 @@ watch(() => store.activeNodeId, () => {
 <template>
   <main v-show="isActive" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
     <div
-      class="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-surface/80 backdrop-blur-md px-4 py-2 rounded-full border border-border flex items-center gap-4 text-sm shadow-xl tooltip-container">
+      class="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-surface/80 backdrop-blur-md px-4 py-2 rounded-full border border-border flex items-center gap-4 text-sm shadow-xl tooltip-container">
       <template v-if="isShowingParentPreview && previewLineageNode">
         <span class="text-[11px] text-textMuted tracking-wide">
           {{ previewLineageLabel }}: <span class="text-textMain font-semibold">Up/Down</span> to navigate,
@@ -1186,6 +1204,7 @@ watch(() => store.activeNodeId, () => {
             :mask-brush-hardness="maskBrushHardness"
             :mask-brush-mode="maskBrushMode"
             :mask-view-enabled="isMaskViewEnabled"
+            :mask-border-visible="isMaskBorderVisible"
             @cropped="handleCrop"
             @mask-updated="handleMaskUpdated"
             @mask-state-change="handleMaskStateChange"
@@ -1194,6 +1213,7 @@ watch(() => store.activeNodeId, () => {
             @update:view="handleCanvasView" />
 
           <div
+            v-show="!isMaskEditorEnabled"
             class="absolute bottom-4 right-4 z-30 rounded-2xl border border-border bg-surface/88 backdrop-blur-md shadow-xl p-3 flex flex-col gap-3 transition-all"
             :class="isDensityPanelCollapsed ? 'w-auto min-w-[180px]' : 'w-[250px]'">
             <div class="flex items-center justify-between gap-3">
@@ -1600,6 +1620,19 @@ watch(() => store.activeNodeId, () => {
                 Reset
               </button>
             </div>
+
+            <label
+              class="flex items-center gap-2 cursor-pointer select-none"
+              :class="isMaskEditorEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'">
+              <input
+                type="checkbox"
+                :checked="isMaskBorderVisible"
+                @change="isMaskBorderVisible = !isMaskBorderVisible"
+                :disabled="!isMaskEditorEnabled"
+                class="accent-yellow-400 w-3.5 h-3.5 rounded" />
+              <span class="text-[11px] text-textMuted">Show layer border in live view</span>
+              <kbd class="px-1 py-0.5 rounded bg-background/60 border border-border/50 text-[9px] text-textMuted">B</kbd>
+            </label>
 
             <div class="flex items-center justify-between text-[11px]">
               <span :class="maskEditorState.hasMask ? 'text-primary' : 'text-textMuted/70'">

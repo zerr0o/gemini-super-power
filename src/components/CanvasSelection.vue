@@ -25,6 +25,7 @@ const props = withDefaults(defineProps<{
   maskBrushHardness?: number;
   maskBrushMode?: 'hide' | 'reveal';
   maskViewEnabled?: boolean;
+  maskBorderVisible?: boolean;
 }>(), {
   previewSrc: null,
   overlaySrc: null,
@@ -40,6 +41,7 @@ const props = withDefaults(defineProps<{
   maskBrushHardness: 0.72,
   maskBrushMode: 'hide',
   maskViewEnabled: false,
+  maskBorderVisible: false,
 });
 
 export interface CropData {
@@ -621,29 +623,41 @@ async function renderLiveComposite() {
     if (staticOverlayCanvas.value) {
       ctx.drawImage(staticOverlayCanvas.value, 0, 0, canvas.width, canvas.height);
     }
+    if (props.maskBorderVisible) {
+      ctx.strokeStyle = 'rgba(250, 204, 21, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        drawLeft + 0.5,
+        drawTop + 0.5,
+        drawWidth - 1,
+        drawHeight - 1,
+      );
+    }
   }
 
   drawMaskCursor(ctx);
 }
 
-function getLocalPoint(clientX: number, clientY: number) {
+function getLocalPoint(clientX: number, clientY: number, unclamped = false) {
   const box = renderBox.value;
   const containerRect = containerRef.value?.getBoundingClientRect();
   if (!box || !containerRect) return null;
 
   const xInContainer = clientX - containerRect.left;
   const yInContainer = clientY - containerRect.top;
+  const rawX = (xInContainer - box.x - panOffset.value.x) / zoom.value;
+  const rawY = (yInContainer - box.y - panOffset.value.y) / zoom.value;
 
   return {
-    x: clamp((xInContainer - box.x - panOffset.value.x) / zoom.value, 0, box.w),
-    y: clamp((yInContainer - box.y - panOffset.value.y) / zoom.value, 0, box.h),
+    x: unclamped ? rawX : clamp(rawX, 0, box.w),
+    y: unclamped ? rawY : clamp(rawY, 0, box.h),
     xInContainer,
     yInContainer,
   };
 }
 
-function getDocumentPoint(clientX: number, clientY: number) {
-  const localPoint = getLocalPoint(clientX, clientY);
+function getDocumentPoint(clientX: number, clientY: number, unclamped = false) {
+  const localPoint = getLocalPoint(clientX, clientY, unclamped);
   const box = renderBox.value;
   if (!localPoint || !box || naturalSize.value.width < 1 || naturalSize.value.height < 1) return null;
 
@@ -658,26 +672,17 @@ function getDocumentPoint(clientX: number, clientY: number) {
 function getMaskPoint(clientX: number, clientY: number) {
   const layer = selectedMaskLayer.value;
   const editableMask = maskCanvas.value;
-  const point = getDocumentPoint(clientX, clientY);
+  const point = getDocumentPoint(clientX, clientY, true);
   if (!layer || !editableMask || !point) {
     maskPointerPreview.value = null;
     return null;
   }
 
-  const inside = (
-    point.docX >= layer.left
-    && point.docX <= layer.left + layer.width
-    && point.docY >= layer.top
-    && point.docY <= layer.top + layer.height
-  );
-
   maskPointerPreview.value = {
     x: point.localX,
     y: point.localY,
-    inside,
+    inside: true,
   };
-
-  if (!inside) return null;
 
   return {
     x: ((point.docX - layer.left) / Math.max(1, layer.width)) * editableMask.width,
@@ -1228,6 +1233,7 @@ watch(
     props.maskBrushRadius,
     props.maskBrushHardness,
     props.maskBrushMode,
+    props.maskBorderVisible,
   ],
   () => {
     emitMaskState();
