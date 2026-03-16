@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { get, set } from 'idb-keyval';
+import { isBlobRef, storeBlob, resolveBlob, trackExistingRef } from '../services/blobStore';
 
 export type ReferenceImageKind = 'upload' | 'crop' | 'implicit-node';
 
@@ -138,16 +139,6 @@ export const useAppStore = defineStore('app', () => {
     };
   }
 
-  function cloneLayerMask(mask: LayerMaskPayload | null | undefined): LayerMaskPayload | null {
-    if (!mask) return null;
-
-    return {
-      dataUrl: mask.dataUrl,
-      width: mask.width,
-      height: mask.height,
-      updatedAt: mask.updatedAt,
-    };
-  }
 
   function normalizeImageNode(node: ImageNode): ImageNode {
     return {
@@ -185,54 +176,119 @@ export const useAppStore = defineStore('app', () => {
     };
   }
 
-  function serializeImageNode(node: ImageNode): ImageNode {
+  let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let _saveInFlight = false;
+  let _savePending = false;
+
+  async function serializeImageNodeWithBlobs(node: ImageNode): Promise<ImageNode> {
+    const nodeId = node.id;
+    const blobBase64 = await storeBlob(`${nodeId}:blob`, node.blobBase64);
+
+    const geminiResultBase64 = node.geminiResultBase64
+      ? await storeBlob(`${nodeId}:gemini`, node.geminiResultBase64)
+      : null;
+
+    const finalResultBase64 = node.finalResultBase64 && node.finalResultBase64 !== node.blobBase64
+      ? await storeBlob(`${nodeId}:final`, node.finalResultBase64)
+      : undefined;
+
     const fullResult = node.finalResultBase64 ?? node.blobBase64;
     const thumbnail = node.finalResultThumbnailBase64 && node.finalResultThumbnailBase64 !== fullResult
       ? node.finalResultThumbnailBase64
       : null;
 
+    const layerMask = node.layerMask ? {
+      dataUrl: node.layerMask.dataUrl && node.layerMask.dataUrl.length > 50000
+        ? await storeBlob(`${nodeId}:mask`, node.layerMask.dataUrl)
+        : node.layerMask.dataUrl,
+      width: node.layerMask.width,
+      height: node.layerMask.height,
+      updatedAt: node.layerMask.updatedAt,
+    } : null;
+
+    const referenceSnapshots = await Promise.all(
+      (node.referenceSnapshots ?? []).map(async (ref, i) => {
+        if (ref.kind === 'implicit-node' && ref.sourceNodeId) {
+          return { ...ref, dataUrl: '' };
+        }
+        if (ref.dataUrl && ref.dataUrl.length > 50000) {
+          return { ...ref, dataUrl: await storeBlob(`${nodeId}:ref:${i}`, ref.dataUrl) };
+        }
+        return { ...ref };
+      })
+    );
+
     return {
       id: node.id,
       parentId: node.parentId ?? null,
-      blobBase64: node.blobBase64,
+      blobBase64,
       prompt: node.prompt,
       model: node.model,
       createdAt: node.createdAt,
       sourceUri: node.sourceUri ?? null,
       modificationBox: cloneModificationBox(node.modificationBox),
-      referenceSnapshots: (node.referenceSnapshots ?? []).map(reference => serializeReferenceImage(reference)),
-      geminiResultBase64: node.geminiResultBase64 ?? null,
+      referenceSnapshots,
+      geminiResultBase64,
       generatedImageSize: cloneImageDimensions(node.generatedImageSize),
       finalImageSize: cloneImageDimensions(node.finalImageSize),
-      layerMask: cloneLayerMask(node.layerMask),
-      finalResultBase64: node.finalResultBase64 && node.finalResultBase64 !== node.blobBase64 ? node.finalResultBase64 : undefined,
+      layerMask,
+      finalResultBase64,
       finalResultThumbnailBase64: thumbnail,
     };
   }
 
-  function serializeWorkspace(workspace: Workspace): Workspace {
+  async function serializeWorkspaceWithBlobs(workspace: Workspace): Promise<Workspace> {
+    const slimNodes = await Promise.all(
+      workspace.nodes.map(node => serializeImageNodeWithBlobs(node))
+    );
+
+    const slimRefs = await Promise.all(
+      workspace.referenceImages.map(async (ref, i) => {
+        const serialized = serializeReferenceImage(ref);
+        if (serialized.dataUrl && serialized.dataUrl.length > 50000) {
+          return { ...serialized, dataUrl: await storeBlob(`ws:${workspace.id}:ref:${i}`, serialized.dataUrl) };
+        }
+        return serialized;
+      })
+    );
+
     return {
       id: workspace.id,
       name: workspace.name,
       createdAt: workspace.createdAt,
       activeNodeId: workspace.activeNodeId ?? null,
-      nodes: workspace.nodes.map(node => serializeImageNode(node)),
-      referenceImages: workspace.referenceImages.map(reference => serializeReferenceImage(reference)),
+      nodes: slimNodes,
+      referenceImages: slimRefs,
     };
   }
 
-  let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+  async function executeSave() {
+    if (_saveInFlight) {
+      _savePending = true;
+      return;
+    }
+    _saveInFlight = true;
+    try {
+      const rawData = await Promise.all(
+        workspaces.value.map(workspace => serializeWorkspaceWithBlobs(workspace))
+      );
+      await set('boldbrush_workspaces', rawData);
+    } catch (e) {
+      console.error("Failed to save workspaces to idb:", e);
+    } finally {
+      _saveInFlight = false;
+      if (_savePending) {
+        _savePending = false;
+        void executeSave();
+      }
+    }
+  }
 
   function saveToIdb() {
     if (_saveTimer !== null) clearTimeout(_saveTimer);
-    _saveTimer = setTimeout(async () => {
+    _saveTimer = setTimeout(() => {
       _saveTimer = null;
-      try {
-        const rawData = workspaces.value.map(workspace => serializeWorkspace(workspace));
-        await set('boldbrush_workspaces', rawData);
-      } catch (e) {
-        console.error("Failed to save workspaces to idb:", e);
-      }
+      void executeSave();
     }, 500);
   }
 
@@ -241,22 +297,84 @@ export const useAppStore = defineStore('app', () => {
       clearTimeout(_saveTimer);
       _saveTimer = null;
     }
-    try {
-      const rawData = workspaces.value.map(workspace => serializeWorkspace(workspace));
-      await set('boldbrush_workspaces', rawData);
-    } catch (e) {
-      console.error("Failed to save workspaces to idb:", e);
+    await executeSave();
+  }
+
+  async function resolveNodeBlobs(node: ImageNode): Promise<ImageNode> {
+    const resolved: ImageNode = { ...node };
+
+    if (isBlobRef(resolved.blobBase64)) {
+      trackExistingRef(`${node.id}:blob`, resolved.blobBase64);
+      resolved.blobBase64 = await resolveBlob(resolved.blobBase64);
     }
+
+    if (isBlobRef(resolved.geminiResultBase64)) {
+      trackExistingRef(`${node.id}:gemini`, resolved.geminiResultBase64!);
+      resolved.geminiResultBase64 = await resolveBlob(resolved.geminiResultBase64!);
+    }
+
+    if (resolved.finalResultBase64 && isBlobRef(resolved.finalResultBase64)) {
+      trackExistingRef(`${node.id}:final`, resolved.finalResultBase64);
+      resolved.finalResultBase64 = await resolveBlob(resolved.finalResultBase64);
+    }
+
+    if (resolved.layerMask?.dataUrl && isBlobRef(resolved.layerMask.dataUrl)) {
+      trackExistingRef(`${node.id}:mask`, resolved.layerMask.dataUrl);
+      resolved.layerMask = {
+        ...resolved.layerMask,
+        dataUrl: await resolveBlob(resolved.layerMask.dataUrl),
+      };
+    }
+
+    if (resolved.referenceSnapshots?.length) {
+      resolved.referenceSnapshots = await Promise.all(
+        resolved.referenceSnapshots.map(async (ref, i) => {
+          if (isBlobRef(ref.dataUrl)) {
+            trackExistingRef(`${node.id}:ref:${i}`, ref.dataUrl);
+            return { ...ref, dataUrl: await resolveBlob(ref.dataUrl) };
+          }
+          return ref;
+        })
+      );
+    }
+
+    return resolved;
+  }
+
+  async function resolveWorkspaceBlobs(workspace: Workspace): Promise<Workspace> {
+    const resolvedNodes = await Promise.all(
+      workspace.nodes.map(node => resolveNodeBlobs(node))
+    );
+
+    const resolvedRefs = await Promise.all(
+      workspace.referenceImages.map(async (ref, i) => {
+        if (isBlobRef(ref.dataUrl)) {
+          trackExistingRef(`ws:${workspace.id}:ref:${i}`, ref.dataUrl);
+          return { ...ref, dataUrl: await resolveBlob(ref.dataUrl) };
+        }
+        return ref;
+      })
+    );
+
+    return {
+      ...workspace,
+      nodes: resolvedNodes,
+      referenceImages: resolvedRefs,
+    };
   }
 
   // Hydration & Migration Logic
   async function hydrate() {
     try {
-      // 1. Try to load new workspace architecture
+      // 1. Try to load workspace data
       let savedWorkspaces = await get<Workspace[]>('boldbrush_workspaces');
-      
+
       if (savedWorkspaces && savedWorkspaces.length > 0) {
-        workspaces.value = savedWorkspaces.map(workspace => normalizeWorkspace(workspace));
+        // Resolve any blob refs to data URLs for runtime use
+        const resolved = await Promise.all(
+          savedWorkspaces.map(ws => resolveWorkspaceBlobs(ws))
+        );
+        workspaces.value = resolved.map(workspace => normalizeWorkspace(workspace));
         activeWorkspaceId.value = workspaces.value[0].id;
       } else {
         // 2. Migration Layer: Check if legacy flat array exists

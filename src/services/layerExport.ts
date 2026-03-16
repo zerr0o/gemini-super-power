@@ -1,5 +1,7 @@
 import type { ImageNode, ReferenceImageAsset } from '../stores/appStore';
 import { canvasToDataUrl, createMaskCanvas, createMaskedLayerCanvas, loadCachedImage, renderLayerComposite } from './layerRendering';
+import type { PsdLayerInput, PsdWorkerInput } from './psdBinaryHelpers';
+import { toBase64 as psdToBase64, assemblePsd } from './psdBinaryHelpers';
 
 export type BranchLayerKind = 'root' | 'patch' | 'full-frame';
 type ExportFileEncoding = 'utf8' | 'base64' | 'data-url';
@@ -222,234 +224,75 @@ async function createPositionedLayerPng(
   return canvasToDataUrl(canvas);
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunkSize = 0x8000;
+let psdWorker: Worker | null = null;
 
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
+function getPsdWorker(): Worker {
+  if (!psdWorker) {
+    psdWorker = new Worker(new URL('../workers/psdAssembler.worker.ts', import.meta.url), { type: 'module' });
   }
-
-  return btoa(binary);
+  return psdWorker;
 }
 
-function fromAscii(value: string): Uint8Array {
-  return Uint8Array.from(
-    Array.from(value).map(char => {
-      const code = char.charCodeAt(0);
-      return code >= 32 && code <= 126 ? code : 63;
-    }),
-  );
-}
-
-function uint8(value: number): Uint8Array {
-  return new Uint8Array([value & 0xff]);
-}
-
-function uint16be(value: number): Uint8Array {
-  const out = new Uint8Array(2);
-  new DataView(out.buffer).setUint16(0, value, false);
-  return out;
-}
-
-function int16be(value: number): Uint8Array {
-  const out = new Uint8Array(2);
-  new DataView(out.buffer).setInt16(0, value, false);
-  return out;
-}
-
-function uint32be(value: number): Uint8Array {
-  const out = new Uint8Array(4);
-  new DataView(out.buffer).setUint32(0, value, false);
-  return out;
-}
-
-function int32be(value: number): Uint8Array {
-  const out = new Uint8Array(4);
-  new DataView(out.buffer).setInt32(0, value, false);
-  return out;
-}
-
-function concatBytes(...chunks: Uint8Array[]): Uint8Array {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const out = new Uint8Array(totalLength);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return out;
-}
-
-function pascalString(value: string, padMultiple = 4): Uint8Array {
-  const bytes = fromAscii(value).subarray(0, 255);
-  const rawLength = 1 + bytes.length;
-  const paddedLength = Math.ceil(rawLength / padMultiple) * padMultiple;
-  const out = new Uint8Array(paddedLength);
-  out[0] = bytes.length;
-  out.set(bytes, 1);
-  return out;
-}
-
-function splitChannels(rgba: Uint8ClampedArray, pixelCount: number) {
-  const red = new Uint8Array(pixelCount);
-  const green = new Uint8Array(pixelCount);
-  const blue = new Uint8Array(pixelCount);
-  const alpha = new Uint8Array(pixelCount);
-
-  for (let i = 0; i < pixelCount; i += 1) {
-    const offset = i * 4;
-    red[i] = rgba[offset];
-    green[i] = rgba[offset + 1];
-    blue[i] = rgba[offset + 2];
-    alpha[i] = rgba[offset + 3];
-  }
-
-  return { red, green, blue, alpha };
-}
-
-function wrapRawChannelData(channelBytes: Uint8Array): Uint8Array {
-  return concatBytes(uint16be(0), channelBytes);
-}
-
-function buildLayerMaskExtraData(
-  layer: Pick<BranchLayer, 'left' | 'top' | 'width' | 'height'>,
-  hasMask: boolean,
-): Uint8Array {
-  if (!hasMask) {
-    return uint32be(0);
-  }
-
-  const maskData = concatBytes(
-    int32be(layer.top),
-    int32be(layer.left),
-    int32be(layer.top + layer.height),
-    int32be(layer.left + layer.width),
-    uint8(255),
-    uint8(0),
-    uint16be(0),
-  );
-
-  return concatBytes(
-    uint32be(maskData.length),
-    maskData,
-  );
-}
-
-async function writePsd(stack: BranchLayerStack): Promise<Uint8Array> {
-  const layerRecords: Uint8Array[] = [];
-  const layerChannelPayloads: Uint8Array[] = [];
+async function preparePsdInput(stack: BranchLayerStack): Promise<PsdWorkerInput> {
+  const layerInputs: PsdLayerInput[] = [];
 
   for (const layer of stack.layers) {
-    const sourceRaster = await rasterizeDataUrl(
-      layer.sourceDataUrl,
-      layer.width,
-      layer.height,
-    );
-    const channels = splitChannels(sourceRaster.rgba, sourceRaster.width * sourceRaster.height);
+    const sourceRaster = await rasterizeDataUrl(layer.sourceDataUrl, layer.width, layer.height);
     const maskRaster = layer.layerMask ? await rasterizeMask(layer) : null;
-    const wrappedChannels: Array<{ id: number; bytes: Uint8Array }> = [
-      { id: 0, bytes: wrapRawChannelData(channels.red) },
-      { id: 1, bytes: wrapRawChannelData(channels.green) },
-      { id: 2, bytes: wrapRawChannelData(channels.blue) },
-      { id: -1, bytes: wrapRawChannelData(channels.alpha) },
-    ];
 
-    if (maskRaster) {
-      wrappedChannels.push({
-        id: -2,
-        bytes: wrapRawChannelData(maskRaster.grayscale),
-      });
-    }
-
-    const layerName = sanitizeSegment(layer.name, `Layer ${layer.index}`);
-    const extraData = concatBytes(
-      buildLayerMaskExtraData(layer, !!maskRaster),
-      uint32be(0),
-      pascalString(layerName),
-    );
-
-    const record = concatBytes(
-      int32be(layer.top),
-      int32be(layer.left),
-      int32be(layer.top + layer.height),
-      int32be(layer.left + layer.width),
-      uint16be(wrappedChannels.length),
-      ...wrappedChannels.flatMap(channel => [int16be(channel.id), uint32be(channel.bytes.length)]),
-      fromAscii('8BIM'),
-      fromAscii('norm'),
-      uint8(255),
-      uint8(0),
-      uint8(0),
-      uint8(0),
-      uint32be(extraData.length),
-      extraData,
-    );
-
-    layerRecords.push(record);
-    layerChannelPayloads.push(...wrappedChannels.map(channel => channel.bytes));
+    layerInputs.push({
+      name: sanitizeSegment(layer.name, `Layer ${layer.index}`),
+      left: layer.left,
+      top: layer.top,
+      width: sourceRaster.width,
+      height: sourceRaster.height,
+      rgba: sourceRaster.rgba.buffer as ArrayBuffer,
+      maskGrayscale: maskRaster ? maskRaster.grayscale.buffer as ArrayBuffer : null,
+    });
   }
-
-  const layerInfoData = concatBytes(
-    int16be(stack.layers.length),
-    ...layerRecords,
-    ...layerChannelPayloads,
-  );
-
-  const layerInfoSection = concatBytes(
-    uint32be(layerInfoData.length),
-    layerInfoData,
-  );
-
-  const layerAndMaskSectionPayload = concatBytes(
-    layerInfoSection,
-    uint32be(0),
-  );
-
-  const layerAndMaskSection = concatBytes(
-    uint32be(layerAndMaskSectionPayload.length),
-    layerAndMaskSectionPayload,
-  );
 
   const compositeRaster = await rasterizeDataUrl(
     stack.finalCompositeDataUrl,
     stack.documentWidth,
     stack.documentHeight,
   );
-  const compositeChannels = splitChannels(
-    compositeRaster.rgba,
-    compositeRaster.width * compositeRaster.height,
-  );
 
-  const compositeImageData = concatBytes(
-    uint16be(0),
-    compositeChannels.red,
-    compositeChannels.green,
-    compositeChannels.blue,
-    compositeChannels.alpha,
-  );
+  return {
+    layers: layerInputs,
+    compositeRgba: compositeRaster.rgba.buffer as ArrayBuffer,
+    compositeWidth: compositeRaster.width,
+    compositeHeight: compositeRaster.height,
+    documentWidth: stack.documentWidth,
+    documentHeight: stack.documentHeight,
+  };
+}
 
-  const header = concatBytes(
-    fromAscii('8BPS'),
-    uint16be(1),
-    new Uint8Array(6),
-    uint16be(4),
-    uint32be(stack.documentHeight),
-    uint32be(stack.documentWidth),
-    uint16be(8),
-    uint16be(3),
-  );
+async function writePsdInWorker(stack: BranchLayerStack): Promise<string> {
+  const input = await preparePsdInput(stack);
 
-  return concatBytes(
-    header,
-    uint32be(0),
-    uint32be(0),
-    layerAndMaskSection,
-    compositeImageData,
-  );
+  try {
+    const worker = getPsdWorker();
+    const transferables = [
+      input.compositeRgba,
+      ...input.layers.map(l => l.rgba),
+      ...input.layers.filter(l => l.maskGrayscale).map(l => l.maskGrayscale!),
+    ];
+
+    return new Promise<string>((resolve, reject) => {
+      worker.onmessage = (event) => {
+        if (event.data.error) {
+          reject(new Error(event.data.error));
+        } else {
+          resolve(event.data.base64);
+        }
+      };
+      worker.onerror = (err) => reject(err);
+      worker.postMessage(input, transferables);
+    });
+  } catch {
+    const psdBytes = assemblePsd(input);
+    return psdToBase64(psdBytes);
+  }
 }
 
 async function buildStack(nodes: ImageNode[], activeNodeId: string | null, workspaceName: string): Promise<BranchLayerStack> {
@@ -654,14 +497,14 @@ export async function buildBranchPsdExport(
   workspaceName = 'workspace',
 ): Promise<BranchPsdExport> {
   const stack = await buildStack(nodes, activeNodeId, workspaceName);
-  const psdBytes = await writePsd(stack);
+  const dataBase64 = await writePsdInWorker(stack);
 
   return {
     defaultFileName: `${sanitizeSegment(`${workspaceName}-${stack.activeNodeId}`, 'layer-export')}.psd`,
     width: stack.documentWidth,
     height: stack.documentHeight,
     layerCount: stack.layers.length,
-    dataBase64: toBase64(psdBytes),
+    dataBase64,
   };
 }
 
