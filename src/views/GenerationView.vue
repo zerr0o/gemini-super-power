@@ -305,8 +305,8 @@ function setSidebarTab(nextTab: 'prompt' | 'mask') {
     return;
   }
 
-  if (nextTab === 'mask') {
-    syncMaskEditorEnabledFromSelection();
+  if (nextTab === 'mask' && canEditMasks.value) {
+    setMaskEditorEnabled(true);
   }
 }
 
@@ -919,6 +919,37 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
     return;
   }
 
+  if (
+    key === 'p'
+    && !e.ctrlKey
+    && !e.metaKey
+    && !e.altKey
+    && !e.repeat
+    && props.isActive
+    && !props.isShortcutSuspended
+    && !isTypingTarget(e.target)
+  ) {
+    e.preventDefault();
+    setSidebarTab('prompt');
+    return;
+  }
+
+  if (
+    key === 'l'
+    && !e.ctrlKey
+    && !e.metaKey
+    && !e.altKey
+    && !e.repeat
+    && props.isActive
+    && !props.isShortcutSuspended
+    && !isTypingTarget(e.target)
+    && canEditMasks.value
+  ) {
+    e.preventDefault();
+    setSidebarTab('mask');
+    return;
+  }
+
   if (key === 'a') {
     if (!canUseParentShortcut(e.target)) return;
     e.preventDefault();
@@ -1262,9 +1293,11 @@ watch(() => store.activeNodeId, () => {
           :class="activeSidebarTab === 'prompt'
             ? 'bg-surface border-border text-textMain shadow-[0_-1px_0_rgba(250,204,21,0.22)_inset]'
             : 'border-transparent text-textMuted hover:text-primary hover:bg-surfaceHover/40'"
-          @click="setSidebarTab('prompt')">
+          @click="setSidebarTab('prompt')"
+          title="Prompt Engine (P)">
           <Type :size="15" :class="activeSidebarTab === 'prompt' ? 'text-primary' : ''" />
           Prompt Engine
+          <kbd class="px-1.5 py-0.5 rounded bg-background/60 border border-border/50 text-[10px] text-textMuted font-normal">P</kbd>
         </button>
         <button
           role="tab"
@@ -1274,9 +1307,11 @@ watch(() => store.activeNodeId, () => {
             ? 'bg-surface border-border text-textMain shadow-[0_-1px_0_rgba(250,204,21,0.22)_inset]'
             : 'border-transparent text-textMuted hover:text-primary hover:bg-surfaceHover/40'"
           :disabled="!canEditMasks"
-          @click="setSidebarTab('mask')">
+          @click="setSidebarTab('mask')"
+          title="Layer Mask (L)">
           <Brush :size="15" :class="activeSidebarTab === 'mask' ? 'text-primary' : ''" />
           Layer Mask
+          <kbd class="px-1.5 py-0.5 rounded bg-background/60 border border-border/50 text-[10px] text-textMuted font-normal">L</kbd>
         </button>
       </div>
     </div>
@@ -1429,15 +1464,13 @@ watch(() => store.activeNodeId, () => {
       <div v-show="activeSidebarTab === 'mask'" class="flex flex-col gap-2">
         <div class="flex items-center justify-between gap-2">
           <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Layer Mask</label>
-          <button
-            @click="setMaskEditorEnabled(!isMaskEditorEnabled)"
-            :disabled="!canEditMasks"
-            class="px-2.5 py-1 rounded-full border text-[11px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          <span
+            class="px-2.5 py-1 rounded-full border text-[11px]"
             :class="isMaskEditorEnabled
-              ? 'border-primary bg-primary text-[#000] font-semibold'
-              : 'border-border text-textMuted hover:border-primary hover:text-primary'">
-            {{ isMaskEditorEnabled ? 'On' : 'Off' }}
-          </button>
+              ? 'border-primary bg-primary/15 text-primary font-semibold'
+              : 'border-border text-textMuted/60'">
+            {{ isMaskEditorEnabled ? 'Editing' : 'Idle' }}
+          </span>
         </div>
 
         <div class="rounded-xl border border-border bg-background/50 p-3 flex flex-col gap-3">

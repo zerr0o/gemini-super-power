@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import type { ImageNode } from '../stores/appStore';
 import { useAppStore } from '../stores/appStore';
 import { Trash2 } from 'lucide-vue-next';
@@ -78,13 +78,64 @@ function centerOnNode(nodeId: string) {
   };
 }
 
+function resetView() {
+  if (!svgContainer.value || laidOutNodes.value.length === 0) {
+    zoom.value = 1;
+    pan.value = { x: 50, y: 50 };
+    return;
+  }
+
+  const rect = svgContainer.value.getBoundingClientRect();
+  const NODE_W = 140;
+  const NODE_H = 180;
+  const PADDING = 60;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const node of laidOutNodes.value) {
+    minX = Math.min(minX, node.x);
+    minY = Math.min(minY, node.y);
+    maxX = Math.max(maxX, node.x + NODE_W);
+    maxY = Math.max(maxY, node.y + NODE_H);
+  }
+
+  const graphW = maxX - minX + PADDING * 2;
+  const graphH = maxY - minY + PADDING * 2;
+  const fitZoom = Math.min(rect.width / graphW, rect.height / graphH, 1);
+
+  zoom.value = Math.max(0.2, fitZoom);
+  pan.value = {
+    x: (rect.width / 2) - ((minX + maxX) / 2) * zoom.value,
+    y: (rect.height / 2) - ((minY + maxY) / 2) * zoom.value,
+  };
+}
+
+function focusActiveNode() {
+  if (props.activeNodeId) centerOnNode(props.activeNodeId);
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (e.key === 'r' || e.key === 'R') {
+    e.preventDefault();
+    resetView();
+  } else if (e.key === 'f' || e.key === 'F') {
+    e.preventDefault();
+    focusActiveNode();
+  }
+}
+
 onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown);
   if (props.nodes.length > 0) {
     nextTick(() => {
       const target = props.activeNodeId || props.nodes[props.nodes.length - 1].id;
       centerOnNode(target);
     });
   }
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeyDown);
 });
 
 // Layout Calculation
@@ -241,9 +292,16 @@ const connections = computed(() => {
                     <img :src="node.finalResultThumbnailBase64 || node.finalResultBase64 || node.blobBase64" class="max-w-full max-h-full object-contain rounded-sm" draggable="false" />
                  </div>
                  
-                 <!-- Hover Image Popout -->
-                 <div class="hidden group-hover:flex absolute z-50 -inset-24 bg-black border border-primary rounded-xl shadow-[0_10px_60px_rgba(0,0,0,1)] items-center justify-center pointer-events-none">
-                    <img :src="node.finalResultBase64 || node.blobBase64" class="max-w-full max-h-full object-contain rounded-lg" draggable="false" />
+                 <!-- Hover Image Popout (zoom-independent size) -->
+                 <div
+                    class="hidden group-hover:flex absolute z-50 bg-black border border-primary rounded-xl shadow-[0_10px_60px_rgba(0,0,0,1)] items-center justify-center pointer-events-none"
+                    :style="{
+                      width: `${320 / zoom}px`,
+                      height: `${320 / zoom}px`,
+                      left: `${(140 - 320 / zoom) / 2}px`,
+                      top: `${(180 - 320 / zoom) / 2}px`,
+                    }">
+                    <img :src="node.finalResultBase64 || node.blobBase64" class="max-w-full max-h-full object-contain rounded-lg p-2" draggable="false" />
                  </div>
                  <div class="flex-1 w-full p-2 flex flex-col gap-1 justify-center bg-surfaceDark border-t border-border/50">
                     <p class="text-[11px] text-text font-medium truncate" :title="node.prompt">{{ node.prompt || 'Base Image' }}</p>
@@ -266,11 +324,13 @@ const connections = computed(() => {
             <span v-else>Clean Graph</span>
           </button>
           
-          <button @click="activeNodeId ? centerOnNode(activeNodeId) : null" class="bg-surface border border-border text-textMuted px-3 py-1.5 rounded-md text-xs hover:text-white shadow-lg transition-colors flex items-center gap-2">
+          <button @click="focusActiveNode" class="bg-surface border border-border text-textMuted px-3 py-1.5 rounded-md text-xs hover:text-white shadow-lg transition-colors flex items-center gap-2" title="Focus active node (F)">
             Focus Active Node
+            <kbd class="ml-1 px-1.5 py-0.5 rounded bg-background/60 border border-border/50 text-[10px] text-textMuted">F</kbd>
           </button>
-          <button @click="zoom = 1; pan = {x: 50, y: 50}" class="bg-surface border border-border text-textMuted px-3 py-1.5 rounded-md text-xs hover:text-white shadow-lg transition-colors flex items-center gap-2">
+          <button @click="resetView" class="bg-surface border border-border text-textMuted px-3 py-1.5 rounded-md text-xs hover:text-white shadow-lg transition-colors flex items-center gap-2" title="Fit entire graph (R)">
             Reset View
+            <kbd class="ml-1 px-1.5 py-0.5 rounded bg-background/60 border border-border/50 text-[10px] text-textMuted">R</kbd>
           </button>
        </div>
 
