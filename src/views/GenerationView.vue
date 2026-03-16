@@ -13,7 +13,7 @@ import { generateImage, ASPECT_RATIO_VALUES, getSupportedAspectRatios, getSuppor
 import type { GenerationParams, AspectRatio, Resolution, GenerationModel, ThinkingLevel } from '../services/geminiService';
 import { getImageDimensionsFromDataUrl, resolveNodeFinalImageSize } from '../services/imageDimensions';
 import { buildBranchLayerStack, buildNodeLineage, type BranchLayerStack } from '../services/layerExport';
-import { renderLayerComposite } from '../services/layerRendering';
+import { canvasToDataUrl, loadCachedImage, renderLayerComposite } from '../services/layerRendering';
 import { buildPixelDensitySummary } from '../services/pixelDensity';
 
 const props = withDefaults(defineProps<{
@@ -129,9 +129,13 @@ const editableMaskLayers = computed<MaskEditableLayer[]>(() =>
     layerMask: layer.layerMask ?? null,
   }))
 );
-const availableMaskLayers = computed(() =>
-  branchLayerStack.value ? [...branchLayerStack.value.layers].reverse() : []
-);
+const availableMaskLayers = computed(() => {
+  const layers = branchLayerStack.value?.layers;
+  if (!layers || layers.length === 0) return [];
+  const reversed = new Array(layers.length);
+  for (let i = 0; i < layers.length; i++) reversed[i] = layers[layers.length - 1 - i];
+  return reversed;
+});
 const selectedMaskLayer = computed(() =>
   branchLayerStack.value?.layers.find(layer => layer.nodeId === selectedMaskLayerNodeId.value) || null
 );
@@ -415,34 +419,22 @@ function buildModificationBox(crop: CropData | null) {
 }
 
 async function createThumbnailDataUrl(sourceDataUrl: string, maxSide = THUMBNAIL_MAX_SIDE): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
+  const img = await loadCachedImage(sourceDataUrl);
+  const longestSide = Math.max(img.naturalWidth, img.naturalHeight);
+  if (!Number.isFinite(longestSide) || longestSide <= 0 || longestSide <= maxSide) {
+    return sourceDataUrl;
+  }
 
-    img.onload = () => {
-      const longestSide = Math.max(img.naturalWidth, img.naturalHeight);
-      if (!Number.isFinite(longestSide) || longestSide <= 0 || longestSide <= maxSide) {
-        resolve(sourceDataUrl);
-        return;
-      }
+  const scale = maxSide / longestSide;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
 
-      const scale = maxSide / longestSide;
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return sourceDataUrl;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        resolve(sourceDataUrl);
-        return;
-      }
-
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/png'));
-    };
-
-    img.onerror = () => resolve(sourceDataUrl);
-    img.src = sourceDataUrl;
-  });
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvasToDataUrl(canvas);
 }
 
 const displayedResolution = computed<Resolution>(() => {
@@ -482,14 +474,16 @@ watch(
 watch(
   () => [
     store.activeNodeId,
-    store.nodes.length,
-    activeLineageMaskVersion.value,
+    activeLineageNodes.value.map(n => n.id).join(':'),
+    isMaskEditorEnabled.value ? null : activeLineageMaskVersion.value,
   ],
   async (_state, _previousState, onCleanup) => {
     let cancelled = false;
     onCleanup(() => {
       cancelled = true;
     });
+
+    if (isMaskEditorEnabled.value) return;
 
     if (!store.activeNodeId) {
       branchLayerStack.value = null;
@@ -513,6 +507,9 @@ watch(
   { immediate: true },
 );
 
+const _previewCache = new Map<string, { imageDataUrl: string; thumbDataUrl: string }>();
+let _previewTimer: ReturnType<typeof setTimeout> | null = null;
+
 watch(
   () => [
     branchLayerStack.value?.activeNodeId ?? null,
@@ -520,62 +517,103 @@ watch(
     branchLayerStack.value?.documentHeight ?? 0,
     branchLayerStack.value?.layers.map(layer => `${layer.nodeId}:${layer.layerMask?.updatedAt ?? 0}`).join('|') ?? '',
   ],
-  async (_state, _previousState, onCleanup) => {
+  (_state, _previousState, onCleanup) => {
     let cancelled = false;
     onCleanup(() => {
       cancelled = true;
+      if (_previewTimer !== null) { clearTimeout(_previewTimer); _previewTimer = null; }
     });
 
     const stack = branchLayerStack.value;
     if (!stack) {
       lineagePreviewImages.value = {};
       lineagePreviewThumbnails.value = {};
+      _previewCache.clear();
       return;
     }
 
-    try {
-      const imageEntries: Array<[string, string]> = [];
-      const thumbnailEntries: Array<[string, string]> = [];
+    if (_previewTimer !== null) clearTimeout(_previewTimer);
+    _previewTimer = setTimeout(async () => {
+      _previewTimer = null;
+      if (cancelled) return;
 
-      for (let index = 0; index < stack.layers.length; index += 1) {
-        const layer = stack.layers[index];
-        const compositeDataUrl = index === stack.layers.length - 1
-          ? stack.finalCompositeDataUrl
-          : (await renderLayerComposite(
+      try {
+        const layerKeys = stack.layers.map(
+          layer => `${layer.nodeId}:${layer.layerMask?.updatedAt ?? 0}`,
+        );
+
+        const compositePromises: Array<Promise<[string, string, string]>> = stack.layers.map(
+          async (layer, index) => {
+            const cacheKey = layerKeys.slice(0, index + 1).join('|');
+            const cached = _previewCache.get(cacheKey);
+            if (cached) return [layer.nodeId, cached.imageDataUrl, cacheKey] as [string, string, string];
+
+            if (index === stack.layers.length - 1) {
+              return [layer.nodeId, stack.finalCompositeDataUrl, cacheKey] as [string, string, string];
+            }
+            const canvas = await renderLayerComposite(
               stack.layers.slice(0, index + 1),
               stack.documentWidth,
               stack.documentHeight,
-            )).toDataURL('image/png');
+            );
+            return [layer.nodeId, await canvasToDataUrl(canvas), cacheKey] as [string, string, string];
+          },
+        );
 
+        const results = await Promise.all(compositePromises);
         if (cancelled) return;
 
-        imageEntries.push([layer.nodeId, compositeDataUrl]);
-        thumbnailEntries.push([layer.nodeId, await createThumbnailDataUrl(compositeDataUrl)]);
-      }
+        const thumbPromises = results.map(
+          async ([nodeId, dataUrl, cacheKey]) => {
+            const cached = _previewCache.get(cacheKey);
+            if (cached) return [nodeId, cached.thumbDataUrl, dataUrl, cacheKey] as [string, string, string, string];
+            const thumb = await createThumbnailDataUrl(dataUrl);
+            return [nodeId, thumb, dataUrl, cacheKey] as [string, string, string, string];
+          },
+        );
 
-      if (!cancelled) {
+        const thumbResults = await Promise.all(thumbPromises);
+        if (cancelled) return;
+
+        const validKeys = new Set<string>();
+        const imageEntries: Array<[string, string]> = [];
+        const thumbnailEntries: Array<[string, string]> = [];
+
+        for (const [nodeId, thumb, imageDataUrl, cacheKey] of thumbResults) {
+          imageEntries.push([nodeId, imageDataUrl]);
+          thumbnailEntries.push([nodeId, thumb]);
+          _previewCache.set(cacheKey, { imageDataUrl, thumbDataUrl: thumb });
+          validKeys.add(cacheKey);
+        }
+
+        for (const key of _previewCache.keys()) {
+          if (!validKeys.has(key)) _previewCache.delete(key);
+        }
+
         lineagePreviewImages.value = Object.fromEntries(imageEntries);
         lineagePreviewThumbnails.value = Object.fromEntries(thumbnailEntries);
+      } catch {
+        if (!cancelled) {
+          lineagePreviewImages.value = {};
+          lineagePreviewThumbnails.value = {};
+        }
       }
-    } catch {
-      if (!cancelled) {
-        lineagePreviewImages.value = {};
-        lineagePreviewThumbnails.value = {};
-      }
-    }
+    }, 150);
   },
   { immediate: true },
 );
 
+let _densityTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
   () => [
     store.activeNodeId,
-    store.nodes.length,
+    activeLineageNodes.value.map(n => n.id).join(':'),
   ],
-  async (_state, _previousState, onCleanup) => {
+  (_state, _previousState, onCleanup) => {
     let cancelled = false;
     onCleanup(() => {
       cancelled = true;
+      if (_densityTimer !== null) { clearTimeout(_densityTimer); _densityTimer = null; }
     });
 
     if (!store.activeNodeId) {
@@ -584,11 +622,15 @@ watch(
       return;
     }
 
-    const summary = await buildPixelDensitySummary(store.nodes, store.activeNodeId);
-    if (!cancelled) {
-      densitySummary.value = summary;
-      densityOverlaySrc.value = summary?.overlayDataUrl || null;
-    }
+    if (_densityTimer !== null) clearTimeout(_densityTimer);
+    _densityTimer = setTimeout(async () => {
+      _densityTimer = null;
+      const summary = await buildPixelDensitySummary(store.nodes, store.activeNodeId);
+      if (!cancelled) {
+        densitySummary.value = summary;
+        densityOverlaySrc.value = summary?.overlayDataUrl || null;
+      }
+    }, 800);
   },
   { immediate: true },
 );
@@ -628,28 +670,20 @@ function handleCrop(data: CropData, action: CropConfirmAction = 'replace-primary
 }
 
 async function compositeImage(baseImg64: string, overlayImg64: string, crop: CropData): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = crop.originalWidth;
-    canvas.height = crop.originalHeight;
-    const ctx = canvas.getContext('2d');
+  const canvas = document.createElement('canvas');
+  canvas.width = crop.originalWidth;
+  canvas.height = crop.originalHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas ctx null');
 
-    if (!ctx) return reject(new Error('Canvas ctx null'));
+  const [baseImg, overlayImg] = await Promise.all([
+    loadCachedImage(baseImg64),
+    loadCachedImage(overlayImg64),
+  ]);
 
-    const baseImg = new Image();
-    baseImg.onload = () => {
-      ctx.drawImage(baseImg, 0, 0);
-      const overlayImg = new Image();
-      overlayImg.onload = () => {
-        ctx.drawImage(overlayImg, crop.x, crop.y, crop.w, crop.h);
-        resolve(canvas.toDataURL('image/png'));
-      };
-      overlayImg.onerror = reject;
-      overlayImg.src = overlayImg64;
-    };
-    baseImg.onerror = reject;
-    baseImg.src = baseImg64;
-  });
+  ctx.drawImage(baseImg, 0, 0);
+  ctx.drawImage(overlayImg, crop.x, crop.y, crop.w, crop.h);
+  return canvasToDataUrl(canvas);
 }
 
 async function onGenerate() {

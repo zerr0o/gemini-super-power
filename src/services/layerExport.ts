@@ -1,5 +1,5 @@
 import type { ImageNode, ReferenceImageAsset } from '../stores/appStore';
-import { createMaskCanvas, createMaskedLayerCanvas, loadCachedImage, renderLayerComposite } from './layerRendering';
+import { canvasToDataUrl, createMaskCanvas, createMaskedLayerCanvas, loadCachedImage, renderLayerComposite } from './layerRendering';
 
 export type BranchLayerKind = 'root' | 'patch' | 'full-frame';
 type ExportFileEncoding = 'utf8' | 'base64' | 'data-url';
@@ -160,7 +160,7 @@ async function rasterizeDataUrl(
     width: targetWidth,
     height: targetHeight,
     rgba: ctx.getImageData(0, 0, targetWidth, targetHeight).data,
-    pngDataUrl: canvas.toDataURL('image/png'),
+    pngDataUrl: await canvasToDataUrl(canvas),
   };
 }
 
@@ -193,7 +193,7 @@ async function rasterizeMask(
     width: maskCanvas.width,
     height: maskCanvas.height,
     grayscale,
-    pngDataUrl: maskCanvas.toDataURL('image/png'),
+    pngDataUrl: await canvasToDataUrl(maskCanvas),
   };
 }
 
@@ -219,7 +219,7 @@ async function createPositionedLayerPng(
     layer.layerMask ?? null,
   );
   ctx.drawImage(maskedLayer, layer.left, layer.top, layer.width, layer.height);
-  return canvas.toDataURL('image/png');
+  return canvasToDataUrl(canvas);
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -506,7 +506,7 @@ async function buildStack(nodes: ImageNode[], activeNodeId: string | null, works
     rootNodeId: rootNode.id,
     documentWidth,
     documentHeight,
-    finalCompositeDataUrl: maskedCompositeCanvas.toDataURL('image/png'),
+    finalCompositeDataUrl: await canvasToDataUrl(maskedCompositeCanvas),
     rootCompositeDataUrl: resolveFinalResult(rootNode),
     layers,
   };

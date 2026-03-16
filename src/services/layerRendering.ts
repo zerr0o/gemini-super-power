@@ -9,26 +9,50 @@ export interface RenderableLayer {
   layerMask?: LayerMaskPayload | null;
 }
 
+const IMAGE_CACHE_MAX = 60;
 const imageCache = new Map<string, Promise<HTMLImageElement>>();
 
 export function loadCachedImage(dataUrl: string): Promise<HTMLImageElement> {
-  if (!imageCache.has(dataUrl)) {
-    imageCache.set(dataUrl, new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Unable to decode image payload for layer rendering.'));
-      img.src = dataUrl;
-    }));
+  const existing = imageCache.get(dataUrl);
+  if (existing) {
+    imageCache.delete(dataUrl);
+    imageCache.set(dataUrl, existing);
+    return existing;
   }
 
-  return imageCache.get(dataUrl)!;
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Unable to decode image payload for layer rendering.'));
+    img.src = dataUrl;
+  });
+
+  imageCache.set(dataUrl, promise);
+
+  if (imageCache.size > IMAGE_CACHE_MAX) {
+    const oldest = imageCache.keys().next().value;
+    if (oldest !== undefined) imageCache.delete(oldest);
+  }
+
+  return promise;
+}
+
+export function canvasToDataUrl(canvas: HTMLCanvasElement): Promise<string> {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => {
+      if (!blob) { resolve(canvas.toDataURL('image/png')); return; }
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(blob);
+    }, 'image/png');
+  });
 }
 
 export function createSolidMaskCanvas(width: number, height: number, value = 255) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(width));
   canvas.height = Math.max(1, Math.round(height));
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (ctx) {
     ctx.fillStyle = `rgb(${value}, ${value}, ${value})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -44,7 +68,7 @@ export async function createMaskCanvas(
   const canvas = createSolidMaskCanvas(width, height, 255);
   if (!mask?.dataUrl) return canvas;
 
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return canvas;
 
   const img = await loadCachedImage(mask.dataUrl);
@@ -53,33 +77,60 @@ export async function createMaskCanvas(
   return canvas;
 }
 
+const LUM_TO_ALPHA_ID = '__lum2a__';
+let _lumFilterReady = false;
+
+function ensureLumToAlphaFilter() {
+  if (_lumFilterReady) return;
+  _lumFilterReady = true;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '0');
+  svg.setAttribute('height', '0');
+  svg.style.position = 'absolute';
+  svg.style.pointerEvents = 'none';
+  svg.innerHTML = `<filter id="${LUM_TO_ALPHA_ID}"><feColorMatrix type="luminanceToAlpha"/></filter>`;
+  document.body.appendChild(svg);
+}
+
 export function createAlphaMaskCanvas(maskCanvas: HTMLCanvasElement) {
+  ensureLumToAlphaFilter();
+
   const alphaCanvas = document.createElement('canvas');
   alphaCanvas.width = Math.max(1, Math.round(maskCanvas.width));
   alphaCanvas.height = Math.max(1, Math.round(maskCanvas.height));
 
-  const sourceCtx = maskCanvas.getContext('2d', { willReadFrequently: true });
-  const alphaCtx = alphaCanvas.getContext('2d', { willReadFrequently: true });
-  if (!sourceCtx || !alphaCtx) {
-    return alphaCanvas;
-  }
+  const ctx = alphaCanvas.getContext('2d');
+  if (!ctx) return alphaCanvas;
 
-  const imageData = sourceCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-  const pixels = imageData.data;
+  ctx.filter = `url(#${LUM_TO_ALPHA_ID})`;
+  ctx.drawImage(maskCanvas, 0, 0);
+  ctx.filter = 'none';
 
-  for (let i = 0; i < pixels.length; i += 4) {
-    const luminance = Math.round((pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3);
-    const sourceAlpha = pixels[i + 3] / 255;
-    const alpha = Math.round(luminance * sourceAlpha);
-
-    pixels[i] = 255;
-    pixels[i + 1] = 255;
-    pixels[i + 2] = 255;
-    pixels[i + 3] = alpha;
-  }
-
-  alphaCtx.putImageData(imageData, 0, 0);
   return alphaCanvas;
+}
+
+export function updateAlphaMaskRegion(
+  alphaMask: HTMLCanvasElement,
+  sourceCanvas: HTMLCanvasElement,
+  region: { x: number; y: number; w: number; h: number },
+) {
+  ensureLumToAlphaFilter();
+
+  const x = Math.max(0, Math.floor(region.x));
+  const y = Math.max(0, Math.floor(region.y));
+  const right = Math.min(sourceCanvas.width, Math.ceil(region.x + region.w));
+  const bottom = Math.min(sourceCanvas.height, Math.ceil(region.y + region.h));
+  const w = right - x;
+  const h = bottom - y;
+  if (w <= 0 || h <= 0) return;
+
+  const ctx = alphaMask.getContext('2d');
+  if (!ctx) return;
+
+  ctx.clearRect(x, y, w, h);
+  ctx.filter = `url(#${LUM_TO_ALPHA_ID})`;
+  ctx.drawImage(sourceCanvas, x, y, w, h, x, y, w, h);
+  ctx.filter = 'none';
 }
 
 export async function createMaskedLayerCanvas(
@@ -99,6 +150,10 @@ export async function createMaskedLayerCanvas(
   const img = await loadCachedImage(sourceDataUrl);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+  const hasMask = mask instanceof HTMLCanvasElement
+    || (mask != null && !!mask.dataUrl);
+  if (!hasMask) return canvas;
 
   const maskCanvas = mask instanceof HTMLCanvasElement
     ? mask

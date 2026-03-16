@@ -1,5 +1,6 @@
 import type { ImageDimensions, ImageNode } from '../stores/appStore';
 
+const IMAGE_SIZE_CACHE_MAX = 80;
 const imageSizeCache = new Map<string, Promise<ImageDimensions>>();
 
 function cloneImageSize(size: ImageDimensions | null | undefined): ImageDimensions | null {
@@ -19,21 +20,29 @@ export function formatImageSize(size: ImageDimensions | null | undefined): strin
 export async function getImageDimensionsFromDataUrl(dataUrl: string | null | undefined): Promise<ImageDimensions | null> {
   if (!dataUrl) return null;
 
-  if (!imageSizeCache.has(dataUrl)) {
-    imageSizeCache.set(dataUrl, new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        resolve({
-          width: img.naturalWidth,
-          height: img.naturalHeight,
-        });
-      };
-      img.onerror = () => reject(new Error('Unable to decode image dimensions.'));
-      img.src = dataUrl;
-    }));
+  const existing = imageSizeCache.get(dataUrl);
+  if (existing) {
+    imageSizeCache.delete(dataUrl);
+    imageSizeCache.set(dataUrl, existing);
+    const size = await existing;
+    return cloneImageSize(size);
   }
 
-  const size = await imageSizeCache.get(dataUrl)!;
+  const promise = new Promise<ImageDimensions>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => reject(new Error('Unable to decode image dimensions.'));
+    img.src = dataUrl;
+  });
+
+  imageSizeCache.set(dataUrl, promise);
+
+  if (imageSizeCache.size > IMAGE_SIZE_CACHE_MAX) {
+    const oldest = imageSizeCache.keys().next().value;
+    if (oldest !== undefined) imageSizeCache.delete(oldest);
+  }
+
+  const size = await promise;
   return cloneImageSize(size);
 }
 

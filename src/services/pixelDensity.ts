@@ -1,5 +1,6 @@
 import type { ImageNode } from '../stores/appStore';
 import { buildNodeLineage } from './layerExport';
+import { canvasToDataUrl } from './layerRendering';
 import { getImageDimensionsFromDataUrl, resolveNodeFinalImageSize, resolveNodeGeneratedImageSize } from './imageDimensions';
 
 export interface PixelDensitySummary {
@@ -28,19 +29,6 @@ function isPatchNode(node: ImageNode) {
   return !!node.modificationBox && !!node.geminiResultBase64;
 }
 
-function getDensityColor(density: number) {
-  const safeDensity = Number.isFinite(density) && density > 0 ? density : 0;
-  const clampedDensity = clamp(safeDensity, 0, 2);
-  const hue = clampedDensity < 1
-    ? 0 + (clampedDensity * 52)
-    : 52 + ((clampedDensity - 1) * 68);
-  const saturation = clampedDensity < 1 ? 90 : 84;
-  const lightness = clampedDensity < 1
-    ? 52 - ((1 - clampedDensity) * 6)
-    : 47 + Math.min(1, clampedDensity - 1) * 7;
-
-  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-}
 
 export async function buildPixelDensitySummary(
   nodes: ImageNode[],
@@ -164,17 +152,44 @@ export async function buildPixelDensitySummary(
     throw new Error('Canvas context unavailable for density overlay.');
   }
 
-  ctx.clearRect(0, 0, overlayWidth, overlayHeight);
-
+  const imageData = ctx.createImageData(overlayWidth, overlayHeight);
+  const pixels = imageData.data;
   let minDensity = Number.POSITIVE_INFINITY;
   let maxDensity = 0;
 
+  const colorCache = new Map<number, [number, number, number]>();
+
+  function densityToRgb(density: number): [number, number, number] {
+    const key = Math.round(density * 1000);
+    const cached = colorCache.get(key);
+    if (cached) return cached;
+
+    const safeDensity = Number.isFinite(density) && density > 0 ? density : 0;
+    const cd = clamp(safeDensity, 0, 2);
+    const hue = cd < 1 ? cd * 52 : 52 + ((cd - 1) * 68);
+    const sat = (cd < 1 ? 90 : 84) / 100;
+    const lit = (cd < 1 ? 52 - ((1 - cd) * 6) : 47 + Math.min(1, cd - 1) * 7) / 100;
+
+    const c = (1 - Math.abs(2 * lit - 1)) * sat;
+    const x2 = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const m = lit - c / 2;
+    let r1 = 0, g1 = 0, b1 = 0;
+    if (hue < 60) { r1 = c; g1 = x2; }
+    else if (hue < 120) { r1 = x2; g1 = c; }
+    else { r1 = 0; g1 = c; b1 = x2; }
+    const rgb: [number, number, number] = [
+      Math.round((r1 + m) * 255),
+      Math.round((g1 + m) * 255),
+      Math.round((b1 + m) * 255),
+    ];
+    colorCache.set(key, rgb);
+    return rgb;
+  }
+
   for (let y = 0; y < overlayHeight; y += 1) {
     const docY = ((y + 0.5) / overlayHeight) * documentHeight;
-
     for (let x = 0; x < overlayWidth; x += 1) {
       const docX = ((x + 0.5) / overlayWidth) * documentWidth;
-
       let localDensity = 1;
       for (let layerIndex = layers.length - 1; layerIndex >= 0; layerIndex -= 1) {
         const layer = layers[layerIndex];
@@ -188,20 +203,23 @@ export async function buildPixelDensitySummary(
           break;
         }
       }
-
       minDensity = Math.min(minDensity, localDensity);
       maxDensity = Math.max(maxDensity, localDensity);
-
-      ctx.fillStyle = getDensityColor(localDensity);
-      ctx.fillRect(x, y, 1, 1);
+      const [r, g, b] = densityToRgb(localDensity);
+      const off = (y * overlayWidth + x) * 4;
+      pixels[off] = r;
+      pixels[off + 1] = g;
+      pixels[off + 2] = b;
+      pixels[off + 3] = 255;
     }
   }
+  ctx.putImageData(imageData, 0, 0);
 
   return {
     documentWidth,
     documentHeight,
     minDensity: Number.isFinite(minDensity) ? minDensity : 1,
     maxDensity: maxDensity > 0 ? maxDensity : 1,
-    overlayDataUrl: canvas.toDataURL('image/png'),
+    overlayDataUrl: await canvasToDataUrl(canvas),
   };
 }

@@ -221,7 +221,26 @@ export const useAppStore = defineStore('app', () => {
     };
   }
 
-  async function saveToIdb() {
+  let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function saveToIdb() {
+    if (_saveTimer !== null) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(async () => {
+      _saveTimer = null;
+      try {
+        const rawData = workspaces.value.map(workspace => serializeWorkspace(workspace));
+        await set('boldbrush_workspaces', rawData);
+      } catch (e) {
+        console.error("Failed to save workspaces to idb:", e);
+      }
+    }, 500);
+  }
+
+  async function flushSaveToIdb() {
+    if (_saveTimer !== null) {
+      clearTimeout(_saveTimer);
+      _saveTimer = null;
+    }
     try {
       const rawData = workspaces.value.map(workspace => serializeWorkspace(workspace));
       await set('boldbrush_workspaces', rawData);
@@ -253,7 +272,7 @@ export const useAppStore = defineStore('app', () => {
             };
             workspaces.value = [migratedWorkspace];
             activeWorkspaceId.value = migratedWorkspace.id;
-           await saveToIdb(); 
+           await flushSaveToIdb();
         } else {
            // 3. Complete new install: Create default empty workspace
            createWorkspace('Session 001');

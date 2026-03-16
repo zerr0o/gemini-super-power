@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Brush, Eye, EyeOff, RotateCcw } from 'lucide-vue-next';
 import { useAppStore } from '../stores/appStore';
 import type { BranchLayerStack } from '../services/layerExport';
-import { createAlphaMaskCanvas, createMaskCanvas, loadCachedImage } from '../services/layerRendering';
+import { canvasToDataUrl, createAlphaMaskCanvas, createMaskCanvas, loadCachedImage } from '../services/layerRendering';
 
 const props = defineProps<{
   stack: BranchLayerStack | null;
@@ -31,6 +31,8 @@ const loadError = ref('');
 let resizeObserver: ResizeObserver | null = null;
 let lastBrushPoint: { x: number; y: number } | null = null;
 let renderFrame: number | null = null;
+let cachedAlphaMask: HTMLCanvasElement | null = null;
+let isAlphaMaskStale = true;
 
 const selectedLayer = computed(() =>
   props.stack?.layers.find(layer => layer.nodeId === selectedLayerNodeId.value) || props.stack?.layers[props.stack.layers.length - 1] || null
@@ -122,6 +124,8 @@ async function loadSelectedLayerAssets() {
     layerImage.value = await loadCachedImage(layer.sourceDataUrl || layer.finalResultDataUrl);
     const nodeMask = selectedNode.value?.layerMask ?? layer.layerMask ?? null;
     maskCanvas.value = await createMaskCanvas(nodeMask, layer.width, layer.height);
+    isAlphaMaskStale = true;
+    cachedAlphaMask = null;
     hasDirtyMask.value = false;
   } catch (error) {
     layerImage.value = null;
@@ -185,10 +189,13 @@ async function renderEditor() {
   if (isMaskViewEnabled.value) {
     ctx.drawImage(maskCanvas.value, metrics.offsetX, metrics.offsetY, metrics.drawWidth, metrics.drawHeight);
   } else {
-    const alphaMaskCanvas = createAlphaMaskCanvas(maskCanvas.value);
+    if (isAlphaMaskStale || !cachedAlphaMask) {
+      cachedAlphaMask = createAlphaMaskCanvas(maskCanvas.value);
+      isAlphaMaskStale = false;
+    }
     ctx.drawImage(layerImage.value, metrics.offsetX, metrics.offsetY, metrics.drawWidth, metrics.drawHeight);
     ctx.globalCompositeOperation = 'destination-in';
-    ctx.drawImage(alphaMaskCanvas, metrics.offsetX, metrics.offsetY, metrics.drawWidth, metrics.drawHeight);
+    ctx.drawImage(cachedAlphaMask, metrics.offsetX, metrics.offsetY, metrics.drawWidth, metrics.drawHeight);
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -252,6 +259,7 @@ function stampBrush(x: number, y: number) {
   ctx.arc(x, y, brushRadius.value, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+  isAlphaMaskStale = true;
 }
 
 function paintBetweenPoints(from: { x: number; y: number }, to: { x: number; y: number }) {
@@ -273,8 +281,9 @@ async function persistMask() {
   const editableMask = maskCanvas.value;
   if (!layer || !editableMask || !hasDirtyMask.value) return;
 
+  const dataUrl = await canvasToDataUrl(editableMask);
   store.setNodeLayerMask(layer.nodeId, {
-    dataUrl: editableMask.toDataURL('image/png'),
+    dataUrl,
     width: editableMask.width,
     height: editableMask.height,
     updatedAt: Date.now(),

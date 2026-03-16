@@ -5,7 +5,7 @@ import { Check, Plus, Star, X as XIcon } from 'lucide-vue-next';
 import { ASPECT_RATIO_VALUES } from '../services/geminiService';
 import type { AspectRatio } from '../services/geminiService';
 import type { LayerMaskPayload } from '../stores/appStore';
-import { createAlphaMaskCanvas, createMaskCanvas, loadCachedImage, renderLayerComposite } from '../services/layerRendering';
+import { canvasToDataUrl, createAlphaMaskCanvas, createMaskCanvas, loadCachedImage, renderLayerComposite, updateAlphaMaskRegion } from '../services/layerRendering';
 
 const props = withDefaults(defineProps<{
   imageSrc: string;
@@ -122,7 +122,27 @@ let liveCompositeRenderToken = 0;
 let liveCompositeCacheToken = 0;
 let lastMaskPoint: { x: number; y: number } | null = null;
 let isAlphaMaskDirty = true;
+let alphaMaskDirtyRect: { x: number; y: number; w: number; h: number } | null = null;
+let maskPersistToken = 0;
 const maskUndoStack: HTMLCanvasElement[] = [];
+
+function expandDirtyRect(cx: number, cy: number, radius: number) {
+  const rect = {
+    x: cx - radius,
+    y: cy - radius,
+    w: radius * 2,
+    h: radius * 2,
+  };
+  if (!alphaMaskDirtyRect) {
+    alphaMaskDirtyRect = rect;
+  } else {
+    const left = Math.min(alphaMaskDirtyRect.x, rect.x);
+    const top = Math.min(alphaMaskDirtyRect.y, rect.y);
+    const right = Math.max(alphaMaskDirtyRect.x + alphaMaskDirtyRect.w, rect.x + rect.w);
+    const bottom = Math.max(alphaMaskDirtyRect.y + alphaMaskDirtyRect.h, rect.y + rect.h);
+    alphaMaskDirtyRect = { x: left, y: top, w: right - left, h: bottom - top };
+  }
+}
 
 function parseRatio(r: string) {
   if (r === 'auto') return 0;
@@ -251,46 +271,42 @@ function emitMaskState() {
   });
 }
 
-function serializeMaskCanvas(canvas: HTMLCanvasElement): LayerMaskPayload | null {
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return null;
-
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  let hasVisibleMaskChange = false;
-  for (let i = 0; i < imageData.length; i += 4) {
-    if (
-      imageData[i] !== 255
-      || imageData[i + 1] !== 255
-      || imageData[i + 2] !== 255
-      || imageData[i + 3] !== 255
-    ) {
-      hasVisibleMaskChange = true;
-      break;
-    }
-  }
-
-  if (!hasVisibleMaskChange) {
-    return null;
-  }
-
-  return {
-    dataUrl: canvas.toDataURL('image/png'),
-    width: canvas.width,
-    height: canvas.height,
-    updatedAt: Date.now(),
-  };
+function serializeMaskCanvas(canvas: HTMLCanvasElement): Promise<LayerMaskPayload | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => {
+      if (!blob) { resolve(null); return; }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        resolve({
+          dataUrl: reader.result as string,
+          width: canvas.width,
+          height: canvas.height,
+          updatedAt: Date.now(),
+        });
+      };
+      reader.readAsDataURL(blob);
+    }, 'image/png');
+  });
 }
 
 function syncAlphaMaskCanvas() {
   if (!maskCanvas.value) {
     alphaMaskCanvas.value = null;
     isAlphaMaskDirty = false;
+    alphaMaskDirtyRect = null;
     return;
   }
 
   if (!isAlphaMaskDirty && alphaMaskCanvas.value) return;
-  alphaMaskCanvas.value = createAlphaMaskCanvas(maskCanvas.value);
+
+  if (alphaMaskCanvas.value && alphaMaskDirtyRect) {
+    updateAlphaMaskRegion(alphaMaskCanvas.value, maskCanvas.value, alphaMaskDirtyRect);
+  } else {
+    alphaMaskCanvas.value = createAlphaMaskCanvas(maskCanvas.value);
+  }
+
   isAlphaMaskDirty = false;
+  alphaMaskDirtyRect = null;
 }
 
 function clearLiveCompositeCaches() {
@@ -334,6 +350,7 @@ async function loadMaskEditorState() {
     currentMaskNodeId.value = null;
     currentMaskDataUrl.value = null;
     isAlphaMaskDirty = false;
+    alphaMaskDirtyRect = null;
     maskUndoStack.length = 0;
     hasDirtyMask.value = false;
     clearLiveCompositeCaches();
@@ -355,6 +372,7 @@ async function loadMaskEditorState() {
 
   maskCanvas.value = await createMaskCanvas(layer.layerMask ?? null, layer.width, layer.height);
   isAlphaMaskDirty = true;
+  alphaMaskDirtyRect = null;
   currentMaskNodeId.value = layer.nodeId;
   currentMaskDataUrl.value = nextMaskDataUrl;
   maskUndoStack.length = 0;
@@ -385,8 +403,9 @@ async function rebuildLiveCompositeCaches() {
     return;
   }
 
-  const targetWidth = Math.max(1, Math.round(box.w));
-  const targetHeight = Math.max(1, Math.round(box.h));
+  const dpr = window.devicePixelRatio || 1;
+  const targetWidth = Math.max(1, Math.round(box.w * dpr));
+  const targetHeight = Math.max(1, Math.round(box.h * dpr));
   const cacheToken = ++liveCompositeCacheToken;
 
   const underlayLayers = layers.slice(0, selectedIndex);
@@ -482,16 +501,17 @@ function drawMaskCursor(ctx: CanvasRenderingContext2D) {
   const pointer = maskPointerPreview.value;
   if (!pointer?.inside || !renderBox.value || !selectedMaskLayer.value) return;
 
-  const docScale = renderBox.value.w / Math.max(1, naturalSize.value.width);
+  const dpr = window.devicePixelRatio || 1;
+  const docScale = (renderBox.value.w * dpr) / Math.max(1, naturalSize.value.width);
   const cursorRadius = props.maskBrushRadius * docScale;
   ctx.save();
   ctx.beginPath();
-  ctx.arc(pointer.x, pointer.y, cursorRadius, 0, Math.PI * 2);
+  ctx.arc(pointer.x * dpr, pointer.y * dpr, cursorRadius, 0, Math.PI * 2);
   ctx.strokeStyle = props.maskBrushMode === 'hide'
     ? 'rgba(255, 110, 110, 0.95)'
     : 'rgba(255, 255, 255, 0.92)';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.setLineDash([6 * dpr, 4 * dpr]);
   ctx.stroke();
   ctx.restore();
 }
@@ -502,8 +522,9 @@ async function renderLiveComposite() {
   const layer = selectedMaskLayer.value;
   if (!canvas || !box) return;
 
-  const pixelWidth = Math.max(1, Math.round(box.w));
-  const pixelHeight = Math.max(1, Math.round(box.h));
+  const dpr = window.devicePixelRatio || 1;
+  const pixelWidth = Math.max(1, Math.round(box.w * dpr));
+  const pixelHeight = Math.max(1, Math.round(box.h * dpr));
   if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
     canvas.width = pixelWidth;
     canvas.height = pixelHeight;
@@ -680,7 +701,7 @@ function stampMaskBrush(x: number, y: number) {
   const editableMask = maskCanvas.value;
   if (!editableMask) return;
 
-  const ctx = editableMask.getContext('2d');
+  const ctx = editableMask.getContext('2d', { willReadFrequently: true });
   if (!ctx) return;
 
   const hardness = Math.min(0.99, Math.max(0, props.maskBrushHardness));
@@ -704,6 +725,7 @@ function stampMaskBrush(x: number, y: number) {
   ctx.restore();
 
   isAlphaMaskDirty = true;
+  expandDirtyRect(x, y, props.maskBrushRadius);
 }
 
 function paintMaskBetweenPoints(from: { x: number; y: number }, to: { x: number; y: number }) {
@@ -725,7 +747,10 @@ async function persistMask() {
   const editableMask = maskCanvas.value;
   if (!layer || !editableMask || !hasDirtyMask.value) return;
 
-  const serializedMask = serializeMaskCanvas(editableMask);
+  const token = ++maskPersistToken;
+  const serializedMask = await serializeMaskCanvas(editableMask);
+  if (token !== maskPersistToken) return;
+
   currentMaskNodeId.value = layer.nodeId;
   currentMaskDataUrl.value = serializedMask?.dataUrl ?? null;
   emit('mask-updated', {
@@ -871,8 +896,8 @@ async function handleMouseUp() {
   if (isMaskPainting.value) {
     isMaskPainting.value = false;
     lastMaskPoint = null;
-    await persistMask();
     scheduleLiveCompositeRender();
+    await persistMask();
     return;
   }
 
@@ -1023,7 +1048,7 @@ function handleWheel(e: WheelEvent) {
   setZoom(Number(nextZoom.toFixed(2)), anchor);
 }
 
-function finalizeCrop(action: CropConfirmAction = 'replace-primary') {
+async function finalizeCrop(action: CropConfirmAction = 'replace-primary') {
   const box = renderBox.value;
   if (!imageRef.value || !box) return;
   if (boxMetrics.value.w < 20 || boxMetrics.value.h < 20) return;
@@ -1045,10 +1070,12 @@ function finalizeCrop(action: CropConfirmAction = 'replace-primary') {
 
   ctx?.drawImage(imageRef.value, realX, realY, realW, realH, 0, 0, realW, realH);
 
+  const base64 = await canvasToDataUrl(canvas);
+
   emit(
     'cropped',
     {
-      base64: canvas.toDataURL('image/png'),
+      base64,
       originalWidth: natW,
       originalHeight: natH,
       x: realX,
@@ -1068,22 +1095,29 @@ function cancelCrop() {
   emit('update:selectionPx', 0, 0);
 }
 
-function undoMaskStroke() {
+async function undoMaskStroke() {
   const previousMask = maskUndoStack.pop();
   const layer = selectedMaskLayer.value;
   if (!previousMask || !layer) return;
 
   maskCanvas.value = cloneCanvas(previousMask);
   isAlphaMaskDirty = true;
+  alphaMaskDirtyRect = null;
   hasDirtyMask.value = false;
-  currentMaskNodeId.value = layer.nodeId;
-  currentMaskDataUrl.value = serializeMaskCanvas(maskCanvas.value)?.dataUrl ?? null;
-  emit('mask-updated', {
-    nodeId: layer.nodeId,
-    mask: serializeMaskCanvas(maskCanvas.value),
-  });
   emitMaskState();
   scheduleLiveCompositeRender();
+
+  const token = ++maskPersistToken;
+  const serialized = await serializeMaskCanvas(maskCanvas.value);
+  if (token !== maskPersistToken) return;
+
+  currentMaskNodeId.value = layer.nodeId;
+  currentMaskDataUrl.value = serialized?.dataUrl ?? null;
+  emit('mask-updated', {
+    nodeId: layer.nodeId,
+    mask: serialized,
+  });
+  emitMaskState();
 }
 
 function resetMaskStroke() {
@@ -1097,13 +1131,14 @@ function resetMaskStroke() {
   maskCanvas.value = document.createElement('canvas');
   maskCanvas.value.width = layer.width;
   maskCanvas.value.height = layer.height;
-  const ctx = maskCanvas.value.getContext('2d');
+  const ctx = maskCanvas.value.getContext('2d', { willReadFrequently: true });
   if (ctx) {
     ctx.fillStyle = 'rgb(255, 255, 255)';
     ctx.fillRect(0, 0, maskCanvas.value.width, maskCanvas.value.height);
   }
 
   isAlphaMaskDirty = true;
+  alphaMaskDirtyRect = null;
   hasDirtyMask.value = false;
   currentMaskNodeId.value = layer.nodeId;
   currentMaskDataUrl.value = null;
@@ -1161,16 +1196,25 @@ watch(
 );
 
 watch(
-  () => [
-    props.maskTargetNodeId,
-    props.maskEditEnabled,
-    props.liveDocumentWidth,
-    props.liveDocumentHeight,
-    props.liveLayers?.map(layer => `${layer.nodeId}:${layer.sourceDataUrl.length}:${layer.layerMask?.updatedAt ?? 0}`).join('|') ?? '',
-    renderBox.value?.w ?? 0,
-    renderBox.value?.h ?? 0,
-  ],
+  () => {
+    if (!props.maskEditEnabled) return [false];
+    const selIdx = selectedMaskLayerIndex.value;
+    return [
+      props.maskTargetNodeId,
+      props.maskEditEnabled,
+      props.liveDocumentWidth,
+      props.liveDocumentHeight,
+      props.liveLayers?.filter((_, i) => i !== selIdx)
+        .map(layer => `${layer.nodeId}:${layer.sourceDataUrl.length}:${layer.layerMask?.updatedAt ?? 0}`).join('|') ?? '',
+      renderBox.value?.w ?? 0,
+      renderBox.value?.h ?? 0,
+    ];
+  },
   async () => {
+    if (!props.maskEditEnabled) {
+      clearLiveCompositeCaches();
+      return;
+    }
     await rebuildLiveCompositeCaches();
     emitMaskState();
     scheduleLiveCompositeRender();

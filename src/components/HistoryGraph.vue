@@ -93,91 +93,92 @@ interface LayoutNode extends ImageNode {
   y: number;
 }
 
-const laidOutNodes = computed(() => {
-  const result: LayoutNode[] = [];
-  const nodeMap = new Map<string, ImageNode>();
-  const childrenMap = new Map<string, ImageNode[]>();
-  
-  props.nodes.forEach(n => {
-    nodeMap.set(n.id, n);
+const nodeStructureKey = computed(() =>
+  props.nodes.map(n => `${n.id}:${n.parentId ?? ''}`).join('|')
+);
+
+const nodePositions = computed(() => {
+  void nodeStructureKey.value;
+  const positions = new Map<string, { x: number; y: number }>();
+  const childrenMap = new Map<string, string[]>();
+  const allIds = new Set<string>();
+
+  for (const n of props.nodes) {
+    allIds.add(n.id);
     childrenMap.set(n.id, []);
-  });
-  
-  const roots: ImageNode[] = [];
-  props.nodes.forEach(n => {
-    if (n.parentId && nodeMap.has(n.parentId)) {
-      childrenMap.get(n.parentId)!.push(n);
+  }
+
+  const rootIds: string[] = [];
+  for (const n of props.nodes) {
+    if (n.parentId && allIds.has(n.parentId)) {
+      childrenMap.get(n.parentId)!.push(n.id);
     } else {
-      roots.push(n);
+      rootIds.push(n.id);
     }
-  });
-  
+  }
+
   const NODE_W = 140;
   const NODE_H = 180;
   const GAP_X = 40;
   const GAP_Y = 80;
-  
-  // Pass 1: calculate subtree widths
+
   const subtreeWidth = new Map<string, number>();
-  function calcWidth(node: ImageNode): number {
-    const children = childrenMap.get(node.id) || [];
+  function calcWidth(id: string): number {
+    const children = childrenMap.get(id) || [];
     if (children.length === 0) {
-      subtreeWidth.set(node.id, NODE_W);
+      subtreeWidth.set(id, NODE_W);
       return NODE_W;
     }
     let width = 0;
-    children.forEach((child, i) => {
-      width += calcWidth(child);
+    children.forEach((childId, i) => {
+      width += calcWidth(childId);
       if (i < children.length - 1) width += GAP_X;
     });
     const finalWidth = Math.max(NODE_W, width);
-    subtreeWidth.set(node.id, finalWidth);
+    subtreeWidth.set(id, finalWidth);
     return finalWidth;
   }
-  
-  roots.forEach(r => calcWidth(r));
-  
-  // Pass 2: layout nodes top-down based on assigned box
+
+  rootIds.forEach(r => calcWidth(r));
+
   let globalStartX = 0;
-  
-  function assignPosition(node: ImageNode, startX: number, depth: number) {
-    const width = subtreeWidth.get(node.id)!;
-    // node is centered in its allocated width
-    const myX = startX + (width / 2) - (NODE_W / 2);
-    
-    result.push({
-      ...node,
-      x: myX,
-      y: depth * (NODE_H + GAP_Y)
+  function assignPosition(id: string, startX: number, depth: number) {
+    const width = subtreeWidth.get(id)!;
+    positions.set(id, {
+      x: startX + (width / 2) - (NODE_W / 2),
+      y: depth * (NODE_H + GAP_Y),
     });
-    
-    const children = childrenMap.get(node.id) || [];
-    let childStartX = startX;
-    
-    // If children total width is less than parent width, center the children block
+
+    const children = childrenMap.get(id) || [];
     let childrenTotalWidth = 0;
-    children.forEach((child, i) => {
-       childrenTotalWidth += subtreeWidth.get(child.id)!;
-       if (i < children.length - 1) childrenTotalWidth += GAP_X;
+    children.forEach((childId, i) => {
+      childrenTotalWidth += subtreeWidth.get(childId)!;
+      if (i < children.length - 1) childrenTotalWidth += GAP_X;
     });
-    
-    if (childrenTotalWidth < width) {
-       childStartX += (width - childrenTotalWidth) / 2;
-    }
-    
-    children.forEach(child => {
-      assignPosition(child, childStartX, depth + 1);
-      childStartX += subtreeWidth.get(child.id)! + GAP_X;
+
+    let childStartX = startX;
+    if (childrenTotalWidth < width) childStartX += (width - childrenTotalWidth) / 2;
+
+    children.forEach(childId => {
+      assignPosition(childId, childStartX, depth + 1);
+      childStartX += subtreeWidth.get(childId)! + GAP_X;
     });
   }
-  
-  roots.forEach(r => {
-    const w = subtreeWidth.get(r.id)!;
+
+  rootIds.forEach(r => {
     assignPosition(r, globalStartX, 0);
-    globalStartX += w + GAP_X;
+    globalStartX += subtreeWidth.get(r)! + GAP_X;
   });
-  
-  return result;
+
+  return positions;
+});
+
+const laidOutNodes = computed(() => {
+  const positions = nodePositions.value;
+  return props.nodes.map(n => {
+    const pos = positions.get(n.id) || { x: 0, y: 0 };
+    return { ...n, x: pos.x, y: pos.y } as LayoutNode;
+  });
 });
 
 const connections = computed(() => {
