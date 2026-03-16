@@ -125,10 +125,11 @@ The generation view includes a pixel-density panel in the bottom-right corner.
 
 Sessions are stored locally inside the Electron renderer profile through IndexedDB.
 
-- Store key: `boldbrush_workspaces`
+- Workspace metadata: `boldbrush_workspaces`
+- Image blobs: `boldbrush-blobs` (separate IDB store, native Blob format)
 - Legacy migration key: `boldbrush_history`
 
-These keys were intentionally kept for backward compatibility with existing sessions.
+Images are automatically extracted from workspace JSON and stored as native Blobs in a dedicated IndexedDB store. This keeps workspace saves fast (~50 KB metadata instead of hundreds of MB of inline base64). Migration from older inline formats is automatic on first load.
 
 ## Project Structure
 
@@ -137,9 +138,10 @@ electron/                Main process + preload
 public/                  Icons and static assets
 src/
   components/            Shared UI and editor components
-  services/              Gemini, export, rendering, and utility services
+  services/              Gemini, export, rendering, blob store, and utility services
   stores/                Pinia application state
   views/                 Main app views
+  workers/               Web Workers (PSD export)
 ```
 
 ## Build
@@ -215,6 +217,10 @@ Check the following:
 
 Workspace data is only persistent after a successful IndexedDB save. If the app was reloaded while persistence was failing, the missing nodes may not be recoverable automatically.
 
+## License
+
+This project is licensed under [CC BY-NC 4.0](./LICENSE) (Creative Commons Attribution-NonCommercial 4.0 International).
+
 ## Current Version
 
-- `0.3.0`
+- `0.5.1`
