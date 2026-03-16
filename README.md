@@ -207,6 +207,7 @@ Check the following:
 - The GitHub repository exists under the renamed slug
 - Release assets and update metadata were published successfully
 - The user is running an installed packaged build, not the dev server
+- The published version is newer than the installed one according to semver
 
 ### History is missing after a crash
 
@@ -214,4 +215,4 @@ Workspace data is only persistent after a successful IndexedDB save. If the app 
 
 ## Current Version
 
-- `0.0.2`
+- `0.3.0`

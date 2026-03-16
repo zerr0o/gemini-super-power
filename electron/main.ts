@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import type { OpenDialogOptions, SaveDialogOptions } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { fileURLToPath } from 'node:url'
@@ -268,10 +268,13 @@ function createWindow() {
   win = new BrowserWindow({
     title: 'Gemini Super Power',
     icon: path.join(process.env.VITE_PUBLIC, 'icon.png'),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
     },
   })
+
+  win.setMenuBarVisibility(false)
 
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {
@@ -375,6 +378,7 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null)
   createWindow()
   ensureAutoUpdaterConfigured()
 

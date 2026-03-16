@@ -959,6 +959,7 @@ watch(() => selectedMaskLayerNodeId.value, () => {
 });
 
 watch(() => store.activeNodeId, () => {
+  selectedMaskLayerNodeId.value = store.activeNodeId;
   resetTransientSelectionState();
   resetParentPreviewState();
   canvasView.value = { zoom: 1, zoomPercent: 100, canPan: false };
