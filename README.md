@@ -2,6 +2,8 @@
 
 Gemini Super Power is a desktop creative workspace for iterative Gemini image generation. It combines generation history, branch navigation, reference management, layer masks, pixel-density inspection, PSD/layer export, and Electron packaging in a single app.
 
+https://github.com/user-attachments/assets/c03f60c4-fd63-442b-acd6-5c0499243b7d
+
 ## Highlights
 
 - Gemini image generation with Flash and Pro image-preview models
