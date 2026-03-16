@@ -319,20 +319,28 @@ onMounted(() => {
             :is-active="activeTab === 'generation'"
             :is-shortcut-suspended="showRenameModal || showDeleteModal" />
 
-         <main v-if="activeTab !== 'generation'" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
+         <main v-show="activeTab === 'history'" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
             <div class="flex-1 flex overflow-hidden p-8">
-               <template v-if="activeTab === 'history'">
-                  <HistoryGraph :nodes="store.nodes" :activeNodeId="store.activeNodeId"
-                     @select="id => { store.setActiveNode(id); activeTab = 'generation'; }" />
-               </template>
-               <template v-else-if="activeTab === 'tools'">
-                  <NodeInspector />
-               </template>
-               <template v-else-if="activeTab === 'masks'">
-                  <LayerMaskWorkspace />
-               </template>
+               <HistoryGraph :nodes="store.nodes" :activeNodeId="store.activeNodeId"
+                  @select="id => { store.setActiveNode(id); activeTab = 'generation'; }" />
+            </div>
+         </main>
 
-               <template v-else-if="activeTab === 'settings'">
+         <main v-show="activeTab === 'tools'" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
+            <div class="flex-1 flex overflow-hidden p-8">
+               <NodeInspector />
+            </div>
+         </main>
+
+         <main v-show="activeTab === 'masks'" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
+            <div class="flex-1 flex overflow-hidden p-8">
+               <LayerMaskWorkspace />
+            </div>
+         </main>
+
+         <main v-if="activeTab === 'settings'" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
+            <div class="flex-1 flex overflow-hidden p-8">
+               <template v-if="activeTab === 'settings'">
                   <div class="w-full h-full flex flex-col gap-6 max-w-2xl mx-auto pt-8">
                      <h2 class="text-2xl font-semibold mb-4 text-textMain border-b border-border pb-2">Application
                         Settings</h2>
@@ -532,4 +540,9 @@ onMounted(() => {
       opacity: 1;
    }
 }
+
+.tab-fade-enter-active { transition: opacity 0.12s ease, transform 0.12s ease; }
+.tab-fade-leave-active { transition: opacity 0.08s ease; }
+.tab-fade-enter-from { opacity: 0; transform: translateY(6px); }
+.tab-fade-leave-to { opacity: 0; }
 </style>

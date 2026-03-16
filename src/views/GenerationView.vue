@@ -45,6 +45,7 @@ const ALL_RESOLUTION_STEPS: { label: string; value: Resolution; px: number; flas
 ];
 
 const branchLayerStack = ref<BranchLayerStack | null>(null);
+const isLayerStackLoading = ref(false);
 const lineagePreviewImages = ref<Record<string, string>>({});
 const lineagePreviewThumbnails = ref<Record<string, string>>({});
 const activeSidebarTab = ref<'prompt' | 'mask'>('prompt');
@@ -69,9 +70,13 @@ const activeLineageCurrentIndex = computed(() => Math.max(0, activeLineageNodes.
 const activeLineageMaskVersion = computed(() =>
   activeLineageNodes.value.map(node => `${node.id}:${node.layerMask?.updatedAt ?? 0}`).join('|')
 );
-const displayedCanvasImageSrc = computed(() =>
-  branchLayerStack.value?.finalCompositeDataUrl || activeImageNode.value?.blobBase64 || ''
-);
+const displayedCanvasImageSrc = computed(() => {
+  const stack = branchLayerStack.value;
+  if (stack && stack.activeNodeId === store.activeNodeId) {
+    return stack.finalCompositeDataUrl;
+  }
+  return activeImageNode.value?.blobBase64 || '';
+});
 const primaryReference = computed(() => store.referenceImages[0] || null);
 const secondaryReferences = computed(() => store.referenceImages.slice(1));
 const hasExplicitPrimaryReference = computed(() => !!primaryReference.value);
@@ -488,8 +493,11 @@ watch(
     if (!store.activeNodeId) {
       branchLayerStack.value = null;
       selectedMaskLayerNodeId.value = null;
+      isLayerStackLoading.value = false;
       return;
     }
+
+    isLayerStackLoading.value = true;
 
     try {
       const nextStack = await buildBranchLayerStack(store.nodes, store.activeNodeId, workspaceName.value);
@@ -501,6 +509,10 @@ watch(
       if (!cancelled) {
         branchLayerStack.value = null;
         selectedMaskLayerNodeId.value = null;
+      }
+    } finally {
+      if (!cancelled) {
+        isLayerStackLoading.value = false;
       }
     }
   },
@@ -690,7 +702,7 @@ async function onGenerate() {
   if (!prompt.value) return;
 
   if (canvasRef.value?.hasActiveSelection) {
-    canvasRef.value.finalizeCrop();
+    await canvasRef.value.finalizeCrop();
     await nextTick();
   }
 
@@ -994,6 +1006,9 @@ watch(() => selectedMaskLayerNodeId.value, () => {
 
 watch(() => store.activeNodeId, () => {
   selectedMaskLayerNodeId.value = store.activeNodeId;
+  isMaskEditorEnabled.value = false;
+  isMaskViewEnabled.value = false;
+  activeSidebarTab.value = 'prompt';
   resetTransientSelectionState();
   resetParentPreviewState();
   canvasView.value = { zoom: 1, zoomPercent: 100, canPan: false };
@@ -1058,6 +1073,16 @@ watch(() => store.activeNodeId, () => {
     <div class="flex-1 flex overflow-hidden p-8 items-center justify-center">
       <template v-if="activeImageNode">
         <div class="relative w-full h-full">
+          <Transition name="fade">
+            <div
+              v-if="isLayerStackLoading"
+              class="absolute inset-0 z-40 flex items-center justify-center bg-background/70 backdrop-blur-sm rounded-xl pointer-events-none">
+              <div class="flex flex-col items-center gap-3">
+                <Loader2 :size="36" class="animate-spin text-primary" />
+                <p class="text-xs text-textMuted">Loading layers...</p>
+              </div>
+            </div>
+          </Transition>
           <div
             v-if="isShowingLineageTimeline"
             class="absolute left-4 top-1/2 -translate-y-1/2 z-30 w-[132px] max-h-[calc(100%-3rem)] rounded-2xl border border-border bg-surface/88 backdrop-blur-md shadow-xl p-3">
@@ -1616,4 +1641,8 @@ watch(() => store.activeNodeId, () => {
 .timeline-scroll::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, rgba(253, 224, 71, 0.84), rgba(249, 115, 22, 0.46));
 }
+
+.fade-enter-active { transition: opacity 0.15s ease; }
+.fade-leave-active { transition: opacity 0.25s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
