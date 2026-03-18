@@ -37,7 +37,19 @@ const visibleStepNumber = computed(() => {
   return count
 })
 
-const cutoutStyle = computed(() => {
+const overlayClipPath = computed(() => {
+  if (!targetRect.value) return 'none'
+  const pad = 8
+  const r = 12
+  const x = targetRect.value.left - pad
+  const y = targetRect.value.top - pad
+  const w = targetRect.value.width + pad * 2
+  const h = targetRect.value.height + pad * 2
+  // Outer rect (full viewport) + inner rounded rect (hole) using evenodd
+  return `path(evenodd, "M0 0H${window.innerWidth}V${window.innerHeight}H0Z M${x + r} ${y}h${w - 2 * r}q${r} 0 ${r} ${r}v${h - 2 * r}q0 ${r} -${r} ${r}h-${w - 2 * r}q-${r} 0 -${r} -${r}v-${h - 2 * r}q0 -${r} ${r} -${r}Z")`
+})
+
+const cutoutBorderStyle = computed(() => {
   if (!targetRect.value) return { display: 'none' }
   const pad = 8
   return {
@@ -46,7 +58,6 @@ const cutoutStyle = computed(() => {
     left: `${targetRect.value.left - pad}px`,
     width: `${targetRect.value.width + pad * 2}px`,
     height: `${targetRect.value.height + pad * 2}px`,
-    boxShadow: '0 0 0 9999px rgba(0,0,0,0.6)',
     borderRadius: '12px',
     border: '2px solid var(--color-primary)',
     pointerEvents: 'none' as const,
@@ -217,11 +228,17 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <div v-if="modelValue" class="fixed inset-0 z-[999] app-region-no-drag pointer-events-none">
-      <!-- Overlay (visual only, clicks pass through to the target element) -->
-      <div class="fixed inset-0"></div>
+      <!-- Overlay with hole: blocks clicks everywhere except the cutout area -->
+      <div
+        class="fixed inset-0 pointer-events-auto"
+        :style="{
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          clipPath: overlayClipPath,
+          transition: 'clip-path 0.3s ease',
+        }"></div>
 
-      <!-- Cutout highlight -->
-      <div v-if="targetRect" :style="cutoutStyle"></div>
+      <!-- Cutout border (visual only, no pointer events) -->
+      <div v-if="targetRect" :style="cutoutBorderStyle"></div>
 
       <!-- Tooltip -->
       <Transition name="tour-tooltip">
