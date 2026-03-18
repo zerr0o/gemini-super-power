@@ -1,5 +1,5 @@
 import type { Component } from 'vue'
-import { Settings, Type, Move, Image, GitBranch, Brush, Layers, Download } from 'lucide-vue-next'
+import { Settings, Type, Move, Image, GitBranch, Brush, Layers, Download, Sparkles } from 'lucide-vue-next'
 
 export interface OnboardingStep {
   target: string
@@ -27,7 +27,7 @@ export const onboardingSteps: OnboardingStep[] = [
     tab: 'generation',
     sidebarTab: 'prompt',
     title: 'Describe what you want',
-    description: 'Enter your prompt here. Be specific about what to change — and what NOT to change: "don\'t change background", "don\'t change position", "don\'t change anything except the hat".',
+    description: 'Enter your prompt here. Be specific about what to change and what NOT to change: "don\'t change background", "don\'t change position", "don\'t change anything except the hat".',
     icon: Type,
     position: 'left',
   },
@@ -49,12 +49,13 @@ export const onboardingSteps: OnboardingStep[] = [
     position: 'left',
   },
   {
-    target: '[data-tour="history"]',
-    tab: 'history',
-    title: 'Branch your history',
-    description: 'Each generation creates a new node. Try different prompts from the same starting point to explore variations — it\'s a tree, not a line.',
-    icon: GitBranch,
-    position: 'bottom',
+    target: '[data-tour="generate"]',
+    tab: 'generation',
+    sidebarTab: 'prompt',
+    title: 'Generate',
+    description: 'Once your prompt, selection zone and references are set, hit Generate to create a new image. Each generation creates a new node in your history.',
+    icon: Sparkles,
+    position: 'left',
   },
   {
     target: '[data-tour="mask-brush"]',
@@ -73,6 +74,14 @@ export const onboardingSteps: OnboardingStep[] = [
     icon: Layers,
     position: 'bottom',
     optional: true,
+  },
+  {
+    target: '[data-tour="history"]',
+    tab: 'history',
+    title: 'Branch your history',
+    description: 'Each generation creates a new node. Try different prompts from the same starting point to explore variations. It\'s a tree, not a line.',
+    icon: GitBranch,
+    position: 'bottom',
   },
   {
     target: '[data-tour="export"]',

@@ -1663,6 +1663,7 @@ watch(() => store.activeNodeId, () => {
 
     <div class="p-4 border-t border-border bg-background/50">
       <button
+        data-tour="generate"
         @click="onGenerate"
         :disabled="isGenerating"
         class="w-full bg-primary hover:bg-primaryHover text-[#000] font-semibold py-3 flex justify-center items-center gap-2 rounded shadow-[0_0_15px_rgba(250,204,21,0.2)] transition-all disabled:opacity-50 disabled:cursor-not-allowed">
