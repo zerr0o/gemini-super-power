@@ -217,8 +217,8 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <div v-if="modelValue" class="fixed inset-0 z-[999] app-region-no-drag">
-      <!-- Overlay (captures clicks) -->
-      <div class="fixed inset-0" @click="close"></div>
+      <!-- Overlay (blocks interaction but does not close the tour) -->
+      <div class="fixed inset-0"></div>
 
       <!-- Cutout highlight -->
       <div v-if="targetRect" :style="cutoutStyle"></div>
