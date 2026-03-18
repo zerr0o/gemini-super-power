@@ -209,6 +209,7 @@ function handleResize() {
 watch(() => props.modelValue, (visible) => {
   if (visible) {
     currentStepIndex.value = 0
+    props.setSidebarTab('prompt')
     goToStep(0)
   }
 })
