@@ -40,8 +40,12 @@ Central best practice emphasis: **use masks systematically** to remove the "fram
 
 | File | Change |
 |---|---|
-| `src/stores/appStore.ts` | Add `showOnboardingOnStartup: boolean` flag (global, persisted in IDB) |
-| `src/App.vue` | Mount `OnboardingTour`, add "Tutorial" button in sidebar, trigger tour after hydration |
+| `src/stores/appStore.ts` | No changes needed — onboarding flag lives in App.vue via localStorage |
+| `src/App.vue` | Mount `OnboardingTour`, add "Tutorial" button in sidebar, trigger tour after splash `@after-leave`, pass `setActiveTab`/`setSidebarTab` props, add `showTour` to `isShortcutSuspended`, add `app-region-no-drag` on overlay, add `data-tour="api-key"` on settings API key input, add `data-tour="export"` on header export buttons |
+| `src/views/GenerationView.vue` | Add `data-tour` attributes on prompt textarea, reference slots, mask sidebar controls. Add `defineExpose({ setSidebarTab })` to expose sidebar tab switching |
+| `src/components/CanvasSelection.vue` | Add `data-tour="canvas"` on root canvas element |
+| `src/components/HistoryGraph.vue` | Add `data-tour="history"` on graph container |
+| `src/components/LayerMaskWorkspace.vue` | Add `data-tour="mask-studio"` on root element |
 
 ### Step Data Structure
 
@@ -50,15 +54,26 @@ Central best practice emphasis: **use masks systematically** to remove the "fram
 import type { Component } from 'vue'
 
 export interface OnboardingStep {
-  target: string              // CSS selector for the highlight element
+  target: string              // CSS selector using data-tour attributes
   tab?: string                // Tab to activate before showing this step
+  sidebarTab?: string         // Sidebar sub-tab to activate (e.g., 'mask' for step 6)
   title: string
   description: string
   icon?: Component            // Lucide icon component (optional)
   media?: string              // Future: path to mp4/image asset
-  position: 'top' | 'bottom' | 'left' | 'right'
+  position?: 'top' | 'bottom' | 'left' | 'right'  // Default: 'bottom'
   optional?: boolean          // If true, step is skipped if target not found
 }
+
+// Target selectors use data-tour attributes added to each target element:
+// Step 1: [data-tour="api-key"]         — App.vue settings section
+// Step 2: [data-tour="prompt"]          — GenerationView.vue textarea
+// Step 3: [data-tour="canvas"]          — CanvasSelection.vue canvas
+// Step 4: [data-tour="references"]      — GenerationView.vue ref slots
+// Step 5: [data-tour="history"]         — HistoryGraph.vue graph container
+// Step 6: [data-tour="mask-brush"]      — GenerationView.vue mask sidebar
+// Step 7: [data-tour="mask-studio"]     — LayerMaskWorkspace.vue root
+// Step 8: [data-tour="export"]          — App.vue header export buttons
 
 export const onboardingSteps: OnboardingStep[] = [
   // ... 8 steps as defined in the table above
@@ -69,6 +84,8 @@ export const onboardingSteps: OnboardingStep[] = [
 
 **Props:**
 - `modelValue: boolean` — v-model controlling visibility
+- `setActiveTab: (tab: string) => void` — callback to switch the main app tab (since `activeTab` is local to App.vue)
+- `setSidebarTab: (tab: string) => void` — callback to switch GenerationView's sidebar sub-tab (exposed via `defineExpose`)
 
 **Emits:**
 - `update:modelValue` — close the tour
@@ -80,7 +97,7 @@ export const onboardingSteps: OnboardingStep[] = [
 
 **Rendering (Teleport to body):**
 
-1. **Overlay layer** — `fixed inset-0 z-[1000]` transparent div catching clicks (closes/blocks interaction)
+1. **Overlay layer** — `fixed inset-0 z-[999]` transparent div catching clicks (closes/blocks interaction). Uses `z-[999]` to sit below existing modals (`z-[1000]`) in case they overlap.
 2. **Cutout highlight** — Absolutely positioned div over the target element with:
    - `box-shadow: 0 0 0 9999px rgba(0,0,0,0.6)` for the darkened surround
    - `backdrop-filter: blur(8px)` on the overlay (not on the cutout)
@@ -92,7 +109,7 @@ export const onboardingSteps: OnboardingStep[] = [
    - Description text with inline tips
    - Optional Lucide icon
    - Progress dots (active = yellow, inactive = muted)
-   - "Step N of 8" text
+   - "Step N of M" text (M = count of visible/non-skipped steps, dynamically computed)
    - Navigation: Back / Next buttons, Skip link
    - On last step: "Show on startup" checkbox + "Done" button
 
@@ -104,7 +121,9 @@ export const onboardingSteps: OnboardingStep[] = [
 - Recalculate on window resize (debounced)
 
 **Tab switching:**
-- Before showing a step, if `step.tab` differs from current active tab, switch tab programmatically via store and wait one `nextTick` for DOM to update before reading target rect
+- `App.vue` passes a `setActiveTab` callback prop to `OnboardingTour` (since `activeTab` is a local ref in App.vue, not in the store)
+- Before showing a step, if `step.tab` differs from current active tab, call `setActiveTab(step.tab)` and wait `nextTick` + `requestAnimationFrame` for DOM to fully render (important for the Settings tab which uses `v-if`, not `v-show`)
+- If `step.sidebarTab` is set, call `props.setSidebarTab(step.sidebarTab)` to switch GenerationView's internal sidebar tab (e.g., to 'mask' for step 6). GenerationView exposes this via `defineExpose({ setSidebarTab })` (consistent with CanvasSelection which already uses `defineExpose`). App.vue holds a template ref to GenerationView and passes the function down.
 
 **Transitions:**
 - Between steps: tooltip fades out (0.1s), cutout animates position/size (0.3s ease via CSS `transition`), tooltip fades in (0.15s) with `scale-up-center`
@@ -117,14 +136,24 @@ export const onboardingSteps: OnboardingStep[] = [
 
 ### Store Changes
 
-In `appStore.ts`:
+The `showOnboardingOnStartup` flag lives in `App.vue` as a local ref (not in the Pinia store), since it is only needed by App.vue and OnboardingTour:
 
 ```ts
-// Global onboarding flag (not per-workspace)
-const showOnboardingOnStartup = ref(true)
+// In App.vue <script setup>
+// Synchronous read — no async hydration race
+const showOnboardingOnStartup = ref(
+  localStorage.getItem('boldbrush_show_onboarding') !== 'false'
+)
+
+function setShowOnboardingOnStartup(value: boolean) {
+  showOnboardingOnStartup.value = value
+  localStorage.setItem('boldbrush_show_onboarding', String(value))
+}
 ```
 
-Persisted alongside workspace data in IndexedDB under a dedicated key (e.g., `boldbrush_settings`) to keep it separate from workspace state. Loaded during `hydrate()`.
+Persisted via `localStorage` (matching the `apiKey` pattern in appStore), not IndexedDB. Written to localStorage whenever the checkbox value changes.
+
+**New installs vs. existing users:** The localStorage key `boldbrush_show_onboarding` does not exist on first run, so `getItem` returns `null` and `!== 'false'` evaluates to `true` (tour shown). For existing users upgrading, the key also won't exist yet. To avoid annoying power users, the `@after-leave` callback on the splash screen checks: if the localStorage key is absent AND hydrated workspaces contain nodes, skip the tour and write `'false'` to localStorage. Only truly new users (no workspaces, no localStorage key) see the auto-launch.
 
 ### App.vue Integration
 
@@ -134,18 +163,26 @@ Persisted alongside workspace data in IndexedDB under a dedicated key (e.g., `bo
 - Click handler: sets tour visible = true (does not switch tabs — the tour manages tabs itself)
 
 **Auto-launch:**
-- After `store.isHydrated` becomes true and splash screen fades out, if `store.showOnboardingOnStartup` is true, start the tour after a short delay (~500ms) to let the UI settle
+- Use `@after-leave` on the splash screen `<Transition>` to trigger the tour reliably after the splash has fully faded out (rather than a time-based delay)
+- If `store.showOnboardingOnStartup` is true, set `showTour = true` in the `@after-leave` callback
+
+**Shortcut suspension:**
+- Add `showTour` to the existing `isShortcutSuspended` expression: `:is-shortcut-suspended="showRenameModal || showDeleteModal || showTour"` to prevent GenerationView keyboard shortcuts from conflicting with tour navigation
 
 **Tour mount:**
 ```vue
-<OnboardingTour v-model="showTour" />
+<OnboardingTour
+  v-model="showTour"
+  :set-active-tab="(tab: AppTab) => activeTab = tab"
+  :set-sidebar-tab="(tab: string) => generationViewRef?.setSidebarTab(tab)"
+/>
 ```
 
 ## Styling
 
 All styling uses existing design tokens and patterns:
 
-- **Overlay**: `bg-black/60 backdrop-blur-md` (matches existing modals)
+- **Overlay**: `bg-black/60 backdrop-blur-md app-region-no-drag` (matches existing modals, prevents Electron title bar drag)
 - **Tooltip**: `bg-surface border border-border rounded-2xl shadow-2xl p-5`
 - **Tooltip entrance**: `scale-up-center` animation (already defined in App.vue)
 - **Primary button (Next/Done)**: `bg-primary text-black font-semibold rounded-lg px-4 py-2`
@@ -176,8 +213,9 @@ All styling uses existing design tokens and patterns:
 
 ## Testing Plan
 
-- Verify tour launches on first app start (no prior IDB data)
-- Verify tour does NOT launch when "Show on startup" was unchecked
+- Verify tour launches on first app start (no prior IDB data, no `boldbrush_show_onboarding` localStorage key)
+- Verify tour does NOT auto-launch for existing users upgrading (workspaces with nodes exist, no localStorage key yet)
+- Verify tour does NOT launch when "Show on startup" was unchecked (localStorage key = 'false')
 - Verify Tutorial sidebar button launches tour from any tab
 - Verify tab switching works correctly for each step
 - Verify tooltip positioning doesn't overflow viewport
