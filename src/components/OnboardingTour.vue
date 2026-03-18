@@ -184,9 +184,9 @@ function close() {
 
 function handleKeydown(e: KeyboardEvent) {
   if (!props.modelValue) return
-  if (e.key === 'Escape') { close(); return }
-  if (e.key === 'ArrowRight' || e.key === 'Enter') { next(); return }
-  if (e.key === 'ArrowLeft') { prev(); return }
+  if (e.key === 'Escape') { e.preventDefault(); close(); return }
+  if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); next(); return }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); return }
 }
 
 let resizeTimer: ReturnType<typeof setTimeout> | null = null
