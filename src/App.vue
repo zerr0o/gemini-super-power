@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
-import { Brush, Check, Download, Loader2, Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2 } from 'lucide-vue-next';
+import { Brush, Check, Download, Loader2, Settings, Image as ImageIcon, GitBranch, Layers, X, FolderOpen, Plus, Pencil, Trash2, GraduationCap } from 'lucide-vue-next';
 import GenerationView from './views/GenerationView.vue';
+import OnboardingTour from './components/OnboardingTour.vue';
 import HistoryGraph from './components/HistoryGraph.vue';
 import NodeInspector from './components/NodeInspector.vue';
 import LayerMaskWorkspace from './components/LayerMaskWorkspace.vue';
@@ -19,6 +20,29 @@ const renameInputEl = ref<HTMLInputElement | null>(null);
 const showDeleteModal = ref(false);
 const quickExportState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 let quickExportResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+const showTour = ref(false);
+const showOnboardingOnStartup = ref(
+  localStorage.getItem('boldbrush_show_onboarding') !== 'false'
+);
+const generationViewRef = ref<InstanceType<typeof GenerationView> | null>(null);
+
+function setShowOnboardingOnStartup(value: boolean) {
+  showOnboardingOnStartup.value = value;
+  localStorage.setItem('boldbrush_show_onboarding', String(value));
+}
+
+function onSplashAfterLeave() {
+  const lsKey = localStorage.getItem('boldbrush_show_onboarding');
+  if (lsKey === null && store.nodes.length > 0) {
+    localStorage.setItem('boldbrush_show_onboarding', 'false');
+    showOnboardingOnStartup.value = false;
+    return;
+  }
+  if (showOnboardingOnStartup.value) {
+    showTour.value = true;
+  }
+}
 
 type AppUpdateStatus = 'unsupported' | 'disabled' | 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'up-to-date' | 'error';
 
@@ -265,7 +289,7 @@ onMounted(() => {
 <template>
    <div class="h-screen w-screen flex flex-col bg-background text-textMain overflow-hidden relative">
 
-      <Transition name="splash-fade">
+      <Transition name="splash-fade" @after-leave="onSplashAfterLeave">
         <div
           v-if="!store.isHydrated"
           class="fixed inset-0 z-[2000] bg-background flex flex-col items-center justify-center gap-6 select-none">
@@ -383,14 +407,19 @@ onMounted(() => {
             </button>
             <div class="flex-1"></div>
             <button class="p-2 rounded-lg hover:bg-surfaceHover transition-colors text-textMuted"
+               :class="{ 'text-primary': showTour }" @click="showTour = true" title="Tutorial">
+               <GraduationCap :size="20" />
+            </button>
+            <button class="p-2 rounded-lg hover:bg-surfaceHover transition-colors text-textMuted"
                :class="{ 'text-primary': activeTab === 'settings' }" @click="activeTab = 'settings'" title="Settings">
                <Settings :size="20" />
             </button>
          </aside>
 
          <GenerationView
+            ref="generationViewRef"
             :is-active="activeTab === 'generation'"
-            :is-shortcut-suspended="showRenameModal || showDeleteModal" />
+            :is-shortcut-suspended="showRenameModal || showDeleteModal || showTour" />
 
          <main v-show="activeTab === 'history'" class="flex-1 relative bg-[#111] overflow-hidden flex flex-col">
             <div class="flex-1 flex overflow-hidden p-8">
@@ -585,6 +614,13 @@ onMounted(() => {
                </div>
             </div>
          </Teleport>
+
+         <OnboardingTour
+            v-model="showTour"
+            :set-active-tab="(tab: string) => activeTab = tab as AppTab"
+            :set-sidebar-tab="(tab: string) => generationViewRef?.setSidebarTab(tab as 'prompt' | 'mask')"
+            :show-on-startup="showOnboardingOnStartup"
+            @update:show-on-startup="setShowOnboardingOnStartup" />
       </div>
    </div>
 </template>
