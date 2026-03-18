@@ -216,8 +216,8 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="modelValue" class="fixed inset-0 z-[999] app-region-no-drag">
-      <!-- Overlay (blocks interaction but does not close the tour) -->
+    <div v-if="modelValue" class="fixed inset-0 z-[999] app-region-no-drag pointer-events-none">
+      <!-- Overlay (visual only, clicks pass through to the target element) -->
       <div class="fixed inset-0"></div>
 
       <!-- Cutout highlight -->
@@ -228,7 +228,7 @@ onBeforeUnmount(() => {
         <div
           v-if="tooltipVisible && targetRect"
           :style="tooltipStyle"
-          class="bg-surface border border-border rounded-2xl shadow-2xl p-5 scale-up-center"
+          class="bg-surface border border-border rounded-2xl shadow-2xl p-5 scale-up-center pointer-events-auto"
           @click.stop>
 
           <!-- Header with icon -->
