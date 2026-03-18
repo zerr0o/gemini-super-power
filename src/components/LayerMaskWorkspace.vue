@@ -26,7 +26,7 @@ watchEffect(async () => {
 </script>
 
 <template>
-  <div class="w-full h-full min-h-0 overflow-y-auto pr-2 pb-8 flex flex-col gap-6 max-w-6xl mx-auto pt-8">
+  <div data-tour="mask-studio" class="w-full h-full min-h-0 overflow-y-auto pr-2 pb-8 flex flex-col gap-6 max-w-6xl mx-auto pt-8">
     <div class="flex items-end justify-between gap-6 border-b border-border pb-4">
       <div>
         <h2 class="text-2xl font-semibold text-textMain">Layer Mask Studio</h2>

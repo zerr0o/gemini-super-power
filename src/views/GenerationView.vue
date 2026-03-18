@@ -339,6 +339,8 @@ function resetSelectedMask() {
   canvasRef.value?.resetMaskStroke?.();
 }
 
+defineExpose({ setSidebarTab })
+
 function getNodePreviewImage(
   node: { id: string; finalResultThumbnailBase64?: string | null; finalResultBase64?: string | null; blobBase64: string },
 ) {
@@ -1395,7 +1397,7 @@ watch(() => store.activeNodeId, () => {
         </div>
       </div>
 
-      <div v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2">
+      <div data-tour="references" v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2">
         <div class="flex items-center justify-between">
           <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Reference Limits ({{ store.referenceImages.length }}/14)</label>
           <button
@@ -1483,7 +1485,7 @@ watch(() => store.activeNodeId, () => {
         </div>
       </div>
 
-      <div v-show="activeSidebarTab === 'mask'" class="flex flex-col gap-2">
+      <div data-tour="mask-brush" v-show="activeSidebarTab === 'mask'" class="flex flex-col gap-2">
         <div class="flex items-center justify-between gap-2">
           <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Layer Mask</label>
           <span
@@ -1651,6 +1653,7 @@ watch(() => store.activeNodeId, () => {
       <div v-show="activeSidebarTab === 'prompt'" class="flex flex-col gap-2 mt-4 flex-1">
         <label class="text-xs text-textMuted font-medium uppercase tracking-wider">Prompt</label>
         <textarea
+          data-tour="prompt"
           v-model="prompt"
           :disabled="isGenerating"
           class="flex-1 bg-background border border-border rounded p-3 text-sm resize-none focus:outline-none focus:border-primary transition-colors disabled:opacity-50"

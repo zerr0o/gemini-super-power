@@ -257,7 +257,7 @@ const connections = computed(() => {
 </script>
 
 <template>
-  <div class="relative w-full h-full overflow-hidden bg-background cursor-grab active:cursor-grabbing border border-border/20 rounded-lg shadow-inner bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTAgMGg0MHY0MEgweiIgZmlsbD0ibm9uZSIvPjxjaXJjbGUgY3g9IjIwIiBjeT0iMjAiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')]"
+  <div data-tour="history" class="relative w-full h-full overflow-hidden bg-background cursor-grab active:cursor-grabbing border border-border/20 rounded-lg shadow-inner bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTAgMGg0MHY0MEgweiIgZmlsbD0ibm9uZSIvPjxjaXJjbGUgY3g9IjIwIiBjeT0iMjAiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')]"
        ref="svgContainer"
        @mousedown="handleMouseDown"
        @mousemove="handleMouseMove"

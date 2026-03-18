@@ -313,7 +313,7 @@ onMounted(() => {
             </div>
          </div>
 
-         <div class="flex items-center gap-1.5 app-region-no-drag">
+         <div data-tour="export" class="flex items-center gap-1.5 app-region-no-drag">
             <button
                class="h-7 px-2.5 rounded-lg border text-[10px] uppercase tracking-[0.16em] transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-default"
                :class="quickExportState === 'saved'
@@ -420,7 +420,7 @@ onMounted(() => {
                      <div class="flex flex-col gap-2">
                         <label class="text-xs text-textMuted uppercase tracking-wider font-semibold">Gemini API
                            Key</label>
-                        <input type="password" spellcheck="false" :value="store.apiKey"
+                        <input data-tour="api-key" type="password" spellcheck="false" :value="store.apiKey"
                            @input="(e) => store.setApiKey((e.target as HTMLInputElement).value)"
                            class="bg-background border border-border focus:border-primary rounded p-3 focus:outline-none transition-colors"
                            placeholder="AIzaSy..." />

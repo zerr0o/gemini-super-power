@@ -1358,6 +1358,7 @@ defineExpose({
 <template>
   <div
     ref="containerRef"
+    data-tour="canvas"
     class="relative w-full h-full overflow-hidden touch-none select-none"
     @mousedown.prevent="handleMouseDown"
     @mousemove.prevent="handleMouseMove"
