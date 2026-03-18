@@ -26,7 +26,7 @@ export const onboardingSteps: OnboardingStep[] = [
     target: '[data-tour="import"]',
     tab: 'generation',
     title: 'Import your image',
-    description: 'Click or drop an image to load it as your starting point. This becomes the root of your generation tree.',
+    description: 'Click to browse and load an image as your starting point. This becomes the root of your generation tree.',
     icon: Upload,
     position: 'right',
   },
