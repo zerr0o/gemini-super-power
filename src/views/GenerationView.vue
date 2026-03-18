@@ -1279,6 +1279,7 @@ watch(() => store.activeNodeId, () => {
       </template>
       <template v-else-if="!isGenerating">
         <div
+          data-tour="import"
           class="w-full h-full border border-dashed border-border hover:border-primary transition-colors cursor-pointer rounded-xl flex items-center justify-center text-textMuted flex-col gap-2 relative"
           @click="triggerUpload">
           <ImageIcon :size="48" class="opacity-20" />

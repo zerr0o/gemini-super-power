@@ -1,5 +1,5 @@
 import type { Component } from 'vue'
-import { Settings, Type, Move, Image, GitBranch, Brush, Layers, Download, Sparkles } from 'lucide-vue-next'
+import { Settings, Upload, Type, Move, Image, GitBranch, Brush, Layers, Download, Sparkles } from 'lucide-vue-next'
 
 export interface OnboardingStep {
   target: string
@@ -23,13 +23,12 @@ export const onboardingSteps: OnboardingStep[] = [
     position: 'left',
   },
   {
-    target: '[data-tour="prompt"]',
+    target: '[data-tour="import"]',
     tab: 'generation',
-    sidebarTab: 'prompt',
-    title: 'Describe what you want',
-    description: 'Enter your prompt here. Be specific about what to change and what NOT to change: "don\'t change background", "don\'t change position", "don\'t change anything except the hat".',
-    icon: Type,
-    position: 'left',
+    title: 'Import your image',
+    description: 'Click or drop an image to load it as your starting point. This becomes the root of your generation tree.',
+    icon: Upload,
+    position: 'right',
   },
   {
     target: '[data-tour="canvas"]',
@@ -46,6 +45,15 @@ export const onboardingSteps: OnboardingStep[] = [
     title: 'Use references',
     description: 'Ref 1 can be the selection itself. If left empty, it auto-falls back to the active image. Add more references to guide style or content.',
     icon: Image,
+    position: 'left',
+  },
+  {
+    target: '[data-tour="prompt"]',
+    tab: 'generation',
+    sidebarTab: 'prompt',
+    title: 'Describe what you want',
+    description: 'Enter your prompt here. Be specific about what to change and what NOT to change: "don\'t change background", "don\'t change position", "don\'t change anything except the hat".',
+    icon: Type,
     position: 'left',
   },
   {
