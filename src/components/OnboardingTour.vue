@@ -18,6 +18,7 @@ const currentStepIndex = ref(0)
 const targetRect = ref<DOMRect | null>(null)
 const tooltipVisible = ref(false)
 const isTransitioning = ref(false)
+const tooltipEl = ref<HTMLElement | null>(null)
 
 const currentStep = computed(() => onboardingSteps[currentStepIndex.value])
 const totalVisibleSteps = computed(() => {
@@ -73,7 +74,7 @@ function getTooltipPosition(): Record<string, string> {
   const rect = targetRect.value
   const pad = 8
   const tooltipW = 340
-  const tooltipH = 220
+  const tooltipH = tooltipEl.value?.offsetHeight || 220
   const gap = 16
   const pos = currentStep.value?.position || 'bottom'
 
@@ -111,7 +112,11 @@ function getTooltipPosition(): Record<string, string> {
   }
 }
 
-const tooltipStyle = computed(() => getTooltipPosition())
+const tooltipStyle = ref<Record<string, string>>(getTooltipPosition())
+
+function refreshTooltipStyle() {
+  tooltipStyle.value = getTooltipPosition()
+}
 
 async function updateTargetRect() {
   const step = currentStep.value
@@ -123,6 +128,7 @@ async function updateTargetRect() {
   } else {
     targetRect.value = null
   }
+  refreshTooltipStyle()
 }
 
 async function goToStep(index: number, direction: 1 | -1 = 1) {
@@ -171,6 +177,10 @@ async function goToStep(index: number, direction: 1 | -1 = 1) {
   await new Promise(r => setTimeout(r, 300))
 
   tooltipVisible.value = true
+  refreshTooltipStyle()
+  // Recalculate after the tooltip has rendered to use its real height
+  await nextTick()
+  refreshTooltipStyle()
   isTransitioning.value = false
 }
 
@@ -245,6 +255,7 @@ onBeforeUnmount(() => {
       <!-- Tooltip -->
       <Transition name="tour-tooltip">
         <div
+          ref="tooltipEl"
           v-if="tooltipVisible && targetRect"
           :style="tooltipStyle"
           class="bg-surface border border-border rounded-2xl shadow-2xl p-5 scale-up-center pointer-events-auto"
