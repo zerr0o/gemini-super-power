@@ -311,9 +311,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <!-- Show on startup checkbox (last step only) -->
+          <!-- Show on startup checkbox (first and last step) -->
           <label
-            v-if="currentStepIndex === onboardingSteps.length - 1"
+            v-if="currentStepIndex === 0 || currentStepIndex === onboardingSteps.length - 1"
             class="flex items-center gap-2 mt-3 pt-3 border-t border-border cursor-pointer">
             <input
               type="checkbox"
