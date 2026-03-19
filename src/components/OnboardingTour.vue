@@ -125,7 +125,7 @@ async function updateTargetRect() {
   }
 }
 
-async function goToStep(index: number) {
+async function goToStep(index: number, direction: 1 | -1 = 1) {
   if (isTransitioning.value) return
   if (index < 0 || index >= onboardingSteps.length) return
 
@@ -155,11 +155,12 @@ async function goToStep(index: number) {
 
   await updateTargetRect()
 
-  // Skip if target not found
+  // Skip if target not found — continue in the same direction
   if (!targetRect.value) {
     isTransitioning.value = false
-    if (index < onboardingSteps.length - 1) {
-      goToStep(index + 1)
+    const nextIndex = index + direction
+    if (nextIndex >= 0 && nextIndex < onboardingSteps.length) {
+      goToStep(nextIndex, direction)
     } else {
       close()
     }
@@ -175,7 +176,7 @@ async function goToStep(index: number) {
 
 function next() {
   if (currentStepIndex.value < onboardingSteps.length - 1) {
-    goToStep(currentStepIndex.value + 1)
+    goToStep(currentStepIndex.value + 1, 1)
   } else {
     close()
   }
@@ -183,7 +184,7 @@ function next() {
 
 function prev() {
   if (currentStepIndex.value > 0) {
-    goToStep(currentStepIndex.value - 1)
+    goToStep(currentStepIndex.value - 1, -1)
   }
 }
 
