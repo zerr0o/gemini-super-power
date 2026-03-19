@@ -33,12 +33,6 @@ function setShowOnboardingOnStartup(value: boolean) {
 }
 
 function onSplashAfterLeave() {
-  const lsKey = localStorage.getItem('boldbrush_show_onboarding');
-  if (lsKey === null && store.nodes.length > 0) {
-    localStorage.setItem('boldbrush_show_onboarding', 'false');
-    showOnboardingOnStartup.value = false;
-    return;
-  }
   if (showOnboardingOnStartup.value) {
     showTour.value = true;
   }
